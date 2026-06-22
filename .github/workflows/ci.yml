@@ -58,7 +58,7 @@ jobs:
   # DEPLOY_ENABLED=true (GitHub → Settings → Secrets and variables → Actions → Variables).
   # До этого push в main/dev гоняет только quality + helm-validate, образы в GHCR не публикуются.
   build-push:
-    needs: quality
+    needs: [quality, helm-validate]   # деплой только если И тесты, И чарт валидны
     if: github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     strategy:

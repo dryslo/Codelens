@@ -1,0 +1,70 @@
+{{- if and .Values.dbadmin.enabled .Values.ingress.enabled -}}
+{{- $full := include "codelens.fullname" . -}}
+{{- $authUrl := printf "http://%s-backend.%s.svc.cluster.local:%v/auth/forward-auth" $full .Release.Namespace .Values.backend.port -}}
+# Гейт-Ingress админ-панелей: forward-auth (role=admin в БД) перед pgAdmin и дашбордом Qdrant.
+# Тот же host, что приложение (refresh-кука path=/ на одном домене). Реализация - ingress-nginx
+# (external auth + rewrite). Для traefik (overlay k3s) аналог - Middleware forwardAuth, см. values-k3s.
+#
+# pgAdmin и Qdrant - РАЗНЫЕ Ingress: у pgAdmin свой configuration-snippet (X-Script-Name), который
+# нельзя навешивать на путь Qdrant.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}-pgadmin
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgadmin
+  annotations:
+    nginx.ingress.kubernetes.io/auth-url: {{ $authUrl | quote }}
+    nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-User,X-Auth-Role"
+    nginx.ingress.kubernetes.io/auth-signin: {{ printf "https://%s/" .Values.ingress.host | quote }}
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Script-Name /pgadmin;
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /pgadmin(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $full }}-pgadmin
+                port: { number: 80 }
+{{- if .Values.dbadmin.qdrant }}
+---
+# Дашборд Qdrant за тем же гейтом. CAVEAT: UI Qdrant ходит в API по корне-относительным путям
+# (/collections, /cluster), поэтому под субпутём /qdrant часть запросов может не разрешиться -
+# проверить на живом кластере; надёжный вариант - отдельный host (qdrant.<домен>) в корне.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}-qdrant-dashboard
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+  annotations:
+    nginx.ingress.kubernetes.io/auth-url: {{ $authUrl | quote }}
+    nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-User,X-Auth-Role"
+    nginx.ingress.kubernetes.io/auth-signin: {{ printf "https://%s/" .Values.ingress.host | quote }}
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /qdrant(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $full }}-qdrant
+                port: { number: 6333 }
+{{- end }}
+{{- end }}

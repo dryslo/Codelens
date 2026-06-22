@@ -23,19 +23,19 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _set_refresh_cookie(response: Response, auth: AuthService, token: str) -> None:
-    """Положить refresh в httpOnly-cookie (path=/auth), если cookie включены и токен не пуст."""
+    """Положить refresh в httpOnly-cookie (path из cfg.cookie_path), если cookie включены и токен не пуст."""
     cfg = auth.cfg
     if not cfg.cookie_enabled or not token:
         return
     ss = cfg.cookie_samesite if cfg.cookie_samesite in ("lax", "strict", "none") else "lax"
     response.set_cookie(cfg.cookie_name, token, max_age=cfg.refresh_ttl, httponly=True,
                         secure=cfg.cookie_secure,
-                        samesite=cast(Literal["lax", "strict", "none"], ss), path="/auth")
+                        samesite=cast(Literal["lax", "strict", "none"], ss), path=cfg.cookie_path)
 
 
 def _clear_refresh_cookie(response: Response, auth: AuthService) -> None:
-    """Удалить refresh-cookie."""
-    response.delete_cookie(auth.cfg.cookie_name, path="/auth")
+    """Удалить refresh-cookie (тем же path, что и при установке, иначе браузер её не снимет)."""
+    response.delete_cookie(auth.cfg.cookie_name, path=auth.cfg.cookie_path)
 
 
 def _rate_limit(scope: str) -> Callable[..., None]:

@@ -59,6 +59,8 @@ secrets:
   adminLogin: admin
   adminPassword: ""
   hfToken: ""
+  pgadminEmail: admin@codelens.com   # учётка самого pgAdmin (панель dbadmin); доступ всё равно гейтит role=admin
+  pgadminPassword: ""                  # задать при dbadmin.enabled (в prod - через sealed-secrets)
 
 # --- Stateless-сервисы (Deployment+Service[+HPA]) ---
 frontend:
@@ -178,6 +180,18 @@ ingress:
   apiPath: true           # true -> /api/* проксируется на backend
   authPath: false         # true -> /auth/* идёт на backend (single-origin httpOnly refresh-cookie)
   annotations: {}
+
+# --- Администрирование БД (pgAdmin + дашборд Qdrant за forward-auth). По умолчанию выкл. ---
+# Доступ гейтит role=admin в БД через /auth/forward-auth (как Grafana), отдельным dbadmin-ingress
+# с auth-аннотациями ingress-nginx. Учётка pgAdmin - в секрете (secrets.pgadmin*). Требует
+# одного host с приложением (cookie path=/ на том же домене). Для traefik (k3s) - Middleware forwardAuth.
+dbadmin:
+  enabled: false
+  image: dpage/pgadmin4:8.14
+  storage: 1Gi
+  storageClass: ""
+  resources: {}
+  qdrant: true            # добавить путь /qdrant к дашборду Qdrant за тем же гейтом (см. caveat в доке)
 
 # Job индексации корпуса (post-install/upgrade hook). По умолчанию выкл.
 indexJob:

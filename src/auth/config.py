@@ -16,6 +16,8 @@ class AuthConfig:
     cookie_enabled: bool = True    # ставить refresh в httpOnly-cookie на ответах auth
     cookie_secure: bool = False    # true в prod (HTTPS); иначе браузер не сохранит Secure-cookie
     cookie_samesite: str = "lax"   # lax | strict | none
+    cookie_path: str = "/"         # scope куки. "/" нужен, чтобы forward-auth видел её и на /grafana,
+                                   # /pgadmin и пр. (гейт панелей по refresh-куке); сузить ломает гейт
     rate_limit_attempts: int = 10  # попыток login/register на IP за окно (0 - выключено)
     rate_limit_window: int = 60    # окно ограничителя частоты, сек
 
@@ -34,6 +36,7 @@ class AuthConfig:
             cookie_enabled=str(a.get("cookie_enabled", "true")).lower() == "true",
             cookie_secure=str(a.get("cookie_secure", "false")).lower() == "true",
             cookie_samesite=str(a.get("cookie_samesite", "lax")).lower(),
+            cookie_path=a.get("cookie_path", "/"),
             rate_limit_attempts=int(a.get("rate_limit_attempts", 10)),
             rate_limit_window=int(a.get("rate_limit_window", 60)),
         )

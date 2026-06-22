@@ -1,0 +1,90 @@
+{{- if .Values.dbadmin.enabled -}}
+{{- $full := include "codelens.fullname" . -}}
+# pgAdmin 4 - веб-админка Postgres. Доступ снаружи гейтит forward-auth (role=admin) через
+# dbadmin-ingress. Свою учётку (PGADMIN_DEFAULT_*) и сохранённые подключения держит в PVC.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $full }}-pgadmin
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgadmin
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.dbadmin.storageClass }}
+  storageClassName: {{ .Values.dbadmin.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.dbadmin.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-pgadmin
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgadmin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "codelens.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: pgadmin
+  template:
+    metadata:
+      labels:
+        {{- include "codelens.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: pgadmin
+    spec:
+      securityContext:
+        fsGroup: 5050             # uid/gid пользователя pgadmin - чтобы PVC был доступен на запись
+      containers:
+        - name: pgadmin
+          image: {{ .Values.dbadmin.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 80 }
+          env:
+            # SERVER_MODE=False -> desktop-режим: без логина pgAdmin (доступ гейтит dbadmin-ingress
+            # forward-auth, role=admin - единственный гейт). Префикс /pgadmin задаёт X-Script-Name от
+            # ingress (не SCRIPT_NAME-env, иначе двойной префикс при rewrite-target).
+            - { name: PGADMIN_CONFIG_SERVER_MODE, value: "False" }
+            - { name: PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED, value: "False" }
+            - { name: PGADMIN_CONFIG_PROXY_X_HOST_COUNT, value: "1" }
+            - { name: PGADMIN_CONFIG_PROXY_X_PREFIX_COUNT, value: "1" }
+            - name: PGADMIN_DEFAULT_EMAIL
+              valueFrom:
+                secretKeyRef: { name: {{ include "codelens.secretName" . }}, key: PGADMIN_DEFAULT_EMAIL }
+            - name: PGADMIN_DEFAULT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "codelens.secretName" . }}, key: PGADMIN_DEFAULT_PASSWORD }
+          readinessProbe:
+            tcpSocket: { port: 80 }     # tcp, а не httpGet: путь зависит от X-Script-Name, которого у пробы нет
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          {{- with .Values.dbadmin.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/pgadmin }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $full }}-pgadmin
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-pgadmin
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgadmin
+spec:
+  selector:
+    {{- include "codelens.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: pgadmin
+  ports:
+    - { name: http, port: 80, targetPort: 80 }
+{{- end }}

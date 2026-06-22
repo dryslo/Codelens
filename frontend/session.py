@@ -104,8 +104,9 @@ def _apply_session(ctx: Ctx, res: dict) -> None:
     if res.get("refresh_token"):
         try:
             # SameSite=Strict (дефолт контроллера) против CSRF; Secure - в prod (HTTPS).
+            # path="/" - чтобы кука уходила и на /grafana, /pgadmin и пр. (гейт панелей по forward-auth).
             _cookies.set(REFRESH_COOKIE, res["refresh_token"], max_age=_refresh_ttl(ctx),
-                         same_site="strict", secure=_cookie_secure(ctx))
+                         same_site="strict", secure=_cookie_secure(ctx), path="/")
         except Exception:  # noqa: BLE001 - стор cookie ещё не готов; сессия в памяти живёт
             pass
 

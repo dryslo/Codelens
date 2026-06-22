@@ -14,8 +14,10 @@
 Проверка access: JWT декодируется (подпись+exp), затем сверяется `access:{jti}` в кэше - если записи
 нет (logout/expiry), доступ отклоняется.
 
-Refresh дополнительно кладётся в httpOnly+SameSite cookie (`cookie_name`, path `/auth`) - для браузера
-за single-origin reverse-proxy; тело ответа с `refresh_token` сохранено для совместимости (Streamlit,
+Refresh дополнительно кладётся в httpOnly+SameSite cookie (`cookie_name`, path `cookie_path`, по
+умолчанию `/`) - для браузера за single-origin reverse-proxy. `path=/` нужен, чтобы кука уходила и на
+`/grafana`/`/pgadmin` и пр.: гейтинг внешних панелей через `/auth/forward-auth` читает именно её
+(сузить путь - сломать гейт). Тело ответа с `refresh_token` сохранено для совместимости (Streamlit,
 `HttpBackend`). `cookie_secure=true` нужен в prod (HTTPS), иначе браузер не сохранит Secure-cookie.
 
 ## Таблицы (persistence/orm.py)

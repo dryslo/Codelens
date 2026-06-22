@@ -227,6 +227,8 @@ secrets:
   groqApiKey: ""
   adminLogin: admin
   adminPassword: ""
+  pgadminEmail: admin@codelens.com   # учётка pgAdmin; нужна при dbadmin.enabled
+  pgadminPassword: ""                  # задать при dbadmin.enabled (в prod - sealed-secrets)
 ```
 
 `create: true` (база/local) - чарт сам создаёт Secret `<fullname>-secrets` из этих полей. В
@@ -249,6 +251,33 @@ monitoring:
 
 По умолчанию выключено - включается только на кластере с Prometheus Operator. Подробности
 скрейпа и дашборда - в [наблюдаемости](../../util/observability.md).
+
+### dbadmin
+
+```yaml
+dbadmin:
+  enabled: false         # тумблер админ-панелей БД (pgAdmin + дашборд Qdrant за forward-auth)
+  image: dpage/pgadmin4:8.14
+  storage: 1Gi           # PVC pgAdmin (учётка + сохранённые подключения)
+  storageClass: ""
+  resources: {}
+  qdrant: true           # добавить путь /qdrant к дашборду Qdrant за тем же гейтом (см. caveat)
+```
+
+Один тумблер на обе админ-панели. `enabled: true` рендерит pgAdmin (PVC+Deployment+Service) и
+dbadmin-ingress, который гейтит доступ через `/auth/forward-auth` (`role=admin` в БД, как у
+Grafana). Учётку самого pgAdmin даёт Secret - поля `secrets.pgadminEmail`/`secrets.pgadminPassword`
+(→ ключи `PGADMIN_DEFAULT_EMAIL`/`PGADMIN_DEFAULT_PASSWORD`); пароль нужно задать при включении (в
+prod - через sealed-secrets, не в values).
+
+Требование: панели висят на **том же host**, что приложение. forward-auth опирается на
+refresh-cookie `path=/` приложения, а такая cookie прикладывается только в пределах своего домена -
+на отдельном host гейт не увидит сессию. `qdrant: true` добавляет путь `/qdrant` за тем же гейтом
+(с оговоркой про корне-относительные пути UI Qdrant, см. [platform](./templates/platform.md)).
+
+Реализация auth-аннотаций - ingress-nginx (external auth). Для traefik (overlay k3s,
+`ingress.className: traefik`) аналога аннотаций нет: тот же гейт собирается через `Middleware` типа
+`forwardAuth`. Подробности обоих манифестов - в [platform](./templates/platform.md).
 
 ### indexJob
 

@@ -39,8 +39,9 @@ kubectl apply -f deploy/gitops/application-secrets-prod.yaml
 Плейнтекст-секреты в git недопустимы. Оба окружения (staging и prod) берут секрет от sealed-secrets:
 в git лежит зашифрованный `SealedSecret`, контроллер в кластере расшифровывает его в обычный
 `Secret/codelens-secrets`, который поды читают через `envFrom.secretRef` (ключи: `DATABASE_DSN`,
-`JWT_SECRET`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `ADMIN_LOGIN`, `ADMIN_PASSWORD`, `HF_TOKEN`). Чарт
-сам Secret не создаёт (`secrets.create: false` в обоих overlay).
+`JWT_SECRET`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `ADMIN_LOGIN`, `ADMIN_PASSWORD`, `HF_TOKEN`, а при
+`dbadmin.enabled` ещё `PGADMIN_DEFAULT_EMAIL`/`PGADMIN_DEFAULT_PASSWORD` - учётка панели pgAdmin).
+Чарт сам Secret не создаёт (`secrets.create: false` в обоих overlay).
 
 Полная инструкция (установка контроллера, генерация, ротация) - [sealed/README.md](sealed/README.md).
 Кратко:

@@ -31,7 +31,8 @@ seal.sh  ──шифрует публичным ключом──►  SealedSe
 - Контроллер sealed-secrets в кластере расшифровывает `SealedSecret` приватным ключом в обычный
   `Secret/codelens-secrets`.
 - Поды приложения читают этот Secret через `envFrom.secretRef`. Ключи: `DATABASE_DSN`, `JWT_SECRET`,
-  `GROQ_API_KEY`, `GEMINI_API_KEY`, `ADMIN_LOGIN`, `ADMIN_PASSWORD`, `HF_TOKEN`. Имена ключей обязаны
+  `GROQ_API_KEY`, `GEMINI_API_KEY`, `ADMIN_LOGIN`, `ADMIN_PASSWORD`, `HF_TOKEN`, а при `dbadmin.enabled`
+  ещё `PGADMIN_DEFAULT_EMAIL`/`PGADMIN_DEFAULT_PASSWORD` (учётка панели pgAdmin). Имена ключей обязаны
   совпадать с `${VAR}` в `config.yaml` (см. шаблон Secret чарта).
 
 Скоуп шифрования - strict: `SealedSecret` расшифруется только в том же namespace и под тем же именем
