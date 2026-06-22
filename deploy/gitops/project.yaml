@@ -1,0 +1,21 @@
+# AppProject - песочница Argo CD: ограничивает, из каких репозиториев и в какие namespace
+# разрешено деплоить приложениям этого проекта. Объекты Argo живут в namespace самого Argo CD.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: codelens
+  namespace: argocd
+spec:
+  description: CodeLens - RAG-поиск по коду (staging + prod)
+  sourceRepos:
+    - https://github.com/dryslo/Codelens.git
+    - https://prometheus-community.github.io/helm-charts   # чарт kube-prometheus-stack
+  destinations:
+    - { namespace: codelens-staging, server: https://kubernetes.default.svc }
+    - { namespace: codelens-prod,    server: https://kubernetes.default.svc }
+    - { namespace: monitoring,       server: https://kubernetes.default.svc }   # стек наблюдаемости
+  # Чарт ставит cluster-scoped ресурсы (CNPG Cluster и т.п.) - разрешено всё в рамках проекта.
+  clusterResourceWhitelist:
+    - { group: "*", kind: "*" }
+  namespaceResourceWhitelist:
+    - { group: "*", kind: "*" }

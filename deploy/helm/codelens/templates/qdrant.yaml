@@ -1,0 +1,128 @@
+{{- if .Values.qdrant.enabled -}}
+{{- $full := include "codelens.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-qdrant-headless
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+spec:
+  clusterIP: None
+  # Публикуем DNS не-Ready подов: при bootstrap'е кластера лидер должен достучаться до новой реплики
+  # по p2p (6335) ДО того, как её /readyz станет ready (иначе deadlock - реплика не синхронизируется,
+  # а значит не станет Ready, а значит её имя не резолвится).
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "codelens.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+  ports:
+    - { name: http, port: 6333 }
+    - { name: p2p, port: 6335 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-qdrant
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+spec:
+  selector:
+    {{- include "codelens.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+  ports:
+    - { name: http, port: 6333, targetPort: 6333 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $full }}-qdrant
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+spec:
+  serviceName: {{ $full }}-qdrant-headless
+  replicas: {{ .Values.qdrant.replicas }}
+  selector:
+    matchLabels:
+      {{- include "codelens.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: qdrant
+  template:
+    metadata:
+      labels:
+        {{- include "codelens.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: qdrant
+    spec:
+      {{- with .Values.qdrant.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.qdrant.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if gt (int .Values.qdrant.replicas) 1 }}
+      # Разносим реплики по разным узлам - иначе копии шардов окажутся на одном узле (нет HA).
+      # antiAffinity=hard (дефолт, prod): жёстко 1 под/узел; soft (локалка с малым числом узлов):
+      # предпочтительно, но кластер соберётся и при нехватке узлов.
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.qdrant.antiAffinity "soft" }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "codelens.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: qdrant
+          {{- else }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "codelens.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: qdrant
+          {{- end }}
+      {{- end }}
+      containers:
+        - name: qdrant
+          image: {{ .Values.qdrant.image }}
+          ports:
+            - { name: http, containerPort: 6333 }
+            - { name: grpc, containerPort: 6334 }
+            - { name: p2p, containerPort: 6335 }
+          {{- if gt (int .Values.qdrant.replicas) 1 }}
+          env:
+            - { name: QDRANT__CLUSTER__ENABLED, value: "true" }
+          # Распределённый режим: pod-0 поднимает Raft-консенсус, pod-N присоединяется к нему.
+          # Ordinal берётся из hostname StatefulSet (...-qdrant-0/1/2). Проверка на kind перед prod.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              ORD="${HOSTNAME##*-}"
+              HS="{{ $full }}-qdrant-headless"
+              SELF="http://${HOSTNAME}.${HS}:6335"
+              if [ "$ORD" = "0" ]; then
+                exec /qdrant/qdrant --uri "$SELF"
+              else
+                exec /qdrant/qdrant --bootstrap "http://{{ $full }}-qdrant-0.${HS}:6335" --uri "$SELF"
+              fi
+          {{- end }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: 6333 }
+            initialDelaySeconds: 10
+          volumeMounts:
+            - { name: storage, mountPath: /qdrant/storage }
+  volumeClaimTemplates:
+    - metadata: { name: storage }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.qdrant.storageClass }}
+        storageClassName: {{ .Values.qdrant.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.qdrant.storage }}
+{{- end }}

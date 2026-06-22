@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.chroma/
+qdrant_data/
+*.db
+index_chunks.json
+.pytest_cache/
+cache/
+results.json
+.streamlit/
+.idea/
+codelens.egg-info/
+# Plaintext-вход для sealed-secrets, не коммитится (в git идёт только зашифрованный результат).
+deploy/gitops/sealed/secrets.*.env
+# Локальные заметки/объяснения - не коммитятся
+_local/

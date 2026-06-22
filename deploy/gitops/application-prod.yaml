@@ -1,0 +1,32 @@
+# Argo CD Application - prod. Едет за веткой main. Промоушн в прод = merge dev -> main:
+# CI собирает образы, бампит image.tag в values-prod.yaml, Argo синхронизирует.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: codelens-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: codelens
+  source:
+    repoURL: https://github.com/dryslo/Codelens.git
+    targetRevision: main
+    path: deploy/helm/codelens
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: codelens-prod
+  syncPolicy:
+    # selfHeal при включённом automated.prune - prod тоже автосинкается. Для ручного
+    # подтверждения каждого релиза блок automated убирается целиком: тогда Argo показывает
+    # OutOfSync, а синк выполняется кнопкой или `argocd app sync codelens-prod`.
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true

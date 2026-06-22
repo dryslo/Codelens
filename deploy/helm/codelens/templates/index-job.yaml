@@ -1,0 +1,43 @@
+{{- if .Values.indexJob.enabled -}}
+{{- $full := include "codelens.fullname" . -}}
+# Индексация корпуса: эмбеддинги -> Qdrant, реестр -> Postgres. Helm-hook после установки сервисов.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $full }}-index
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: index
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 10        # запас на время подъёма embedder/qdrant/postgres
+  template:
+    metadata:
+      labels:
+        {{- include "codelens.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: index
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: index
+          image: {{ include "codelens.image" (dict "root" . "name" "backend") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "index.py", {{ .Values.indexJob.folder | quote }}, {{ .Values.indexJob.source | quote }}]
+          env:
+            - name: CODELENS_CONFIG
+              value: /app/config/config.yaml
+          envFrom:
+            - secretRef:
+                name: {{ include "codelens.secretName" . }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $full }}-config
+{{- end }}

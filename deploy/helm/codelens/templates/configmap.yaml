@@ -1,0 +1,57 @@
+{{- $full := include "codelens.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $full }}-config
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+data:
+  # Весь config.yaml одним файлом. Секреты - ссылки ${VAR}; значения даёт Secret.
+  config.yaml: |
+    profile: {{ .Values.profile }}
+    role: ${ROLE:-backend}
+    backend_url: http://{{ $full }}-backend:{{ .Values.backend.port }}
+    embedder:
+      kind: {{ .Values.config.embedder.kind }}
+      model: {{ .Values.config.embedder.model | quote }}
+      dim: {{ .Values.config.embedder.dim | int64 }}
+      batch_size: {{ .Values.config.embedder.batch_size | int64 }}
+    embedder_url: http://{{ $full }}-embedder:{{ .Values.embedder.port }}
+    reranker:
+      enabled: {{ .Values.config.reranker.enabled }}
+      kind: remote
+      model: {{ .Values.config.reranker.model | quote }}
+    reranker_url: http://{{ $full }}-reranker:{{ .Values.reranker.port }}
+    inference_url: http://{{ $full }}-embedder:{{ .Values.embedder.port }}
+    retrieval:
+      flags:
+        bm25: {{ .Values.config.retrieval.flags.bm25 | quote }}
+        multiquery: {{ .Values.config.retrieval.flags.multiquery | quote }}
+        hyde: {{ .Values.config.retrieval.flags.hyde | quote }}
+        rerank: {{ .Values.config.retrieval.flags.rerank | quote }}
+        mmr: {{ .Values.config.retrieval.flags.mmr | quote }}
+    vector:
+      kind: {{ .Values.config.vector.kind }}
+      url: http://{{ $full }}-qdrant:6333
+      path: .chroma
+      shards: {{ .Values.config.vector.shards | int64 }}
+      replicas: {{ .Values.config.vector.replicas | int64 }}
+    database_dsn: ${DATABASE_DSN}
+    redis_url: redis://{{ $full }}-redis:6379
+    cache:
+      ttl: {{ .Values.config.cache.ttl | int64 }}
+    jobs:
+      kind: {{ .Values.config.jobs.kind }}
+    auth:
+      enabled: {{ .Values.config.auth.enabled }}
+      jwt_secret: ${JWT_SECRET}
+      jwt_alg: HS256
+      access_ttl: {{ .Values.config.auth.access_ttl | int64 }}
+      refresh_ttl: {{ .Values.config.auth.refresh_ttl | int64 }}
+      oidc: {}
+    llm:
+      kind: {{ .Values.config.llm.kind }}
+      llm_url: http://{{ $full }}-llm:{{ .Values.llm.port }}
+      fast: {{ .Values.config.llm.fast | quote }}
+      providers:
+        {{- toYaml .Values.config.llm.providers | nindent 8 }}

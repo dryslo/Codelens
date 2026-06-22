@@ -1,0 +1,8 @@
+# Автозагрузка дашбордов из каталога (туда монтируется тот же codelens.json, что и в helm).
+apiVersion: 1
+providers:
+  - name: codelens
+    type: file
+    disableDeletion: true
+    options:
+      path: /var/lib/grafana/dashboards

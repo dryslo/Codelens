@@ -1,0 +1,19 @@
+# Overlay PROD (ветка main). Накладывается поверх values.yaml.
+# image.tag правит CI (job bump-tag) при push в main, вручную не редактируется.
+fullnameOverride: codelens
+
+image:
+  tag: latest                  # перезаписывается CI на git-SHA
+
+ingress:
+  host: codelens.example.com
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod   # TLS через cert-manager (если установлен)
+
+# Полный large-масштаб берётся из базового values.yaml (HPA включены, qdrant x3, postgres x3).
+
+# Prod-секреты в git не хранятся. Чарт Secret не создаёт (create: false); вместо него в namespace
+# codelens-prod лежит Secret с именем codelens-secrets, созданный через sealed-secrets /
+# external-secrets (см. deploy/gitops/README.md). Поды читают его тем же envFrom.secretRef.
+secrets:
+  create: false

@@ -1,0 +1,130 @@
+# Профиль small: один экземпляр каждого сервиса в одной сети. Без k8s.
+# Ingest идёт через RQ (JOBS_KIND=redis): backend кладёт задачу в Redis, исполняет worker.
+
+# Общий env backend и worker (один composition root, разные процессы/команды).
+x-app-env: &app-env
+  ROLE: backend
+  VECTOR_KIND: qdrant
+  QDRANT_URL: http://qdrant:6333
+  DATABASE_DSN: postgresql+psycopg://codelens:codelens@postgres/codelens
+  EMBEDDER_KIND: remote
+  EMBEDDER_URL: http://embedder:8000
+  RERANKER_URL: http://reranker:8000   # задействован при RERANKER_ENABLED=true+RERANKER_KIND=remote
+  LLM_KIND: remote
+  LLM_URL: http://llm:8001
+  REDIS_URL: redis://redis:6379
+  JOBS_KIND: redis                     # ingest исполняет worker через RQ
+
+services:
+  frontend:
+    build: { context: .., dockerfile: deploy/Dockerfile.frontend }
+    ports: ["8501:8501"]
+    environment:
+      ROLE: frontend
+      BACKEND_URL: http://backend:8080
+    depends_on: [backend]
+  backend:
+    build: { context: .., dockerfile: deploy/Dockerfile.backend }
+    ports: ["8080:8080"]
+    env_file: [../.env]        # секреты (JWT_SECRET, ADMIN_*, ...); environment ниже их переопределяет
+    environment: *app-env
+    depends_on:
+      embedder: { condition: service_healthy }   # ждём загрузки модели, иначе search/ingest падают
+      llm: { condition: service_started }
+      qdrant: { condition: service_started }
+      postgres: { condition: service_started }
+      redis: { condition: service_started }
+  # Воркер ingest: тянет задачи RQ из Redis, исполняет index_path (тот же образ-пайплайн, без моделей).
+  worker:
+    build: { context: .., dockerfile: deploy/Dockerfile.worker }
+    restart: unless-stopped    # RQ-воркер может выйти на простое - перезапускаем, очередь не теряется
+    env_file: [../.env]
+    environment:
+      <<: *app-env
+      METRICS_PORT: "9100"     # /metrics воркера (глубина очереди + длительность job)
+    ports: ["9100:9100"]
+    depends_on:
+      embedder: { condition: service_healthy }   # ingest эмбеддит чанки - ждём готовности модели
+      llm: { condition: service_started }
+      qdrant: { condition: service_started }
+      postgres: { condition: service_started }
+      redis: { condition: service_started }
+  # Эмбеддер и реранкер - отдельные поды одного образа, роль задаёт INFERENCE_ROLE.
+  embedder:
+    build: { context: .., dockerfile: deploy/Dockerfile.inference }
+    environment:
+      INFERENCE_ROLE: embed
+      EMBEDDER_MODEL: intfloat/multilingual-e5-large
+    volumes: ["model_cache:/app/cache/models"]   # модель качается на старте, кэшируется здесь
+    ports: ["8000:8000"]
+    # порт открывается только после загрузки модели (lifespan); healthcheck даёт depends_on
+    # дождаться готовности. start_period велик под первую загрузку e5-large (~2 ГБ).
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 600s
+  reranker:
+    build: { context: .., dockerfile: deploy/Dockerfile.inference }
+    profiles: ["reranker"]   # политика без cross-encoder -> не стартует на `make up`;
+                             # запуск: docker compose --profile reranker up (+ RERANKER_ENABLED/KIND у backend)
+    environment:
+      INFERENCE_ROLE: rerank
+      RERANKER_MODEL: BAAI/bge-reranker-v2-m3
+    volumes: ["model_cache:/app/cache/models"]
+    ports: ["8002:8000"]
+  llm:
+    build: { context: .., dockerfile: deploy/Dockerfile.llm }
+    ports: ["8001:8001"]
+    # ключи провайдеров (GROQ_API_KEY, GEMINI_API_KEY) живут только здесь (не в backend)
+    env_file: [../.env]
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    volumes: ["qdrant_data:/qdrant/storage"]
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: codelens
+      POSTGRES_PASSWORD: codelens
+      POSTGRES_DB: codelens
+    volumes: ["pg_data:/var/lib/postgresql/data"]
+  redis:
+    image: redis:7
+  # Внешние панели за forward-auth (профиль panels). Запуск: docker compose --profile panels up.
+  # Всё в одном origin через nginx: приложение на http://localhost, Grafana на /grafana
+  # открывается только для role=admin (проверка - /auth/forward-auth по refresh-куке).
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: ["panels"]
+    volumes: ["./nginx/nginx.conf:/etc/nginx/nginx.conf:ro"]
+    ports: ["80:80"]
+    depends_on: [frontend, backend, grafana]
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: ["panels"]
+    environment:
+      GF_SERVER_ROOT_URL: http://localhost/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # auth.proxy: пользователя задаёт nginx заголовком X-Auth-User (из forward-auth), роль - X-Auth-Role.
+      # Так панель знает, кто вошёл, а не безличный anonymous-admin. Доступ всё равно гейтит nginx.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-Auth-User
+      GF_AUTH_PROXY_HEADER_PROPERTY: username
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_PROXY_HEADERS: "Role:X-Auth-Role"
+      GF_AUTH_PROXY_WHITELIST: ""            # доверяем единственному источнику запросов - nginx
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./helm/codelens/dashboards:/var/lib/grafana/dashboards:ro   # тот же codelens.json, что в helm
+    depends_on: [prometheus]
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: ["panels"]
+    volumes: ["./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+volumes:
+  qdrant_data: {}
+  pg_data: {}
+  model_cache: {}    # кэш скачанных моделей embedder/reranker (вместо предзагрузки в образ)

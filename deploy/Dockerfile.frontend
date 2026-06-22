@@ -1,0 +1,11 @@
+FROM python:3.12-slim
+WORKDIR /app
+# 1) Зависимости отдельным кэшируемым слоем (streamlit и пр. в базовых deps pyproject).
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir ".[frontend]"
+# 2) Код и установка самого пакета (без повторного резолва зависимостей)
+COPY . .
+RUN pip install --no-cache-dir --no-deps .
+ENV ROLE=frontend
+EXPOSE 8501
+CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]

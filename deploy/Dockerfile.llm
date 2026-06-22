@@ -1,0 +1,10 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY pyproject.toml ./
+# тонкий образ-шлюз: без ML-весов, только SDK провайдеров и HTTP (группа llm из pyproject)
+RUN pip install --no-cache-dir ".[llm]"
+COPY services ./services
+COPY src ./src
+COPY config ./config
+EXPOSE 8001
+CMD ["uvicorn", "services.llm_app:app", "--host", "0.0.0.0", "--port", "8001"]

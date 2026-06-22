@@ -1,0 +1,72 @@
+{{- if .Values.worker.enabled -}}
+{{- $full := include "codelens.fullname" . -}}
+# Воркер ingest (RQ): тянет задачи из Redis, исполняет index_path. Без Service/порта.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-worker
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "codelens.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "codelens.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "codelens.image" (dict "root" . "name" .Values.worker.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http                       # /metrics (у воркера нет HTTP-сервиса - отдельный порт)
+              containerPort: {{ .Values.worker.metricsPort }}
+          envFrom:
+            - secretRef:
+                name: {{ include "codelens.secretName" . }}
+          env:
+            - name: CODELENS_CONFIG
+              value: /app/config/config.yaml
+            - name: METRICS_PORT
+              value: {{ .Values.worker.metricsPort | quote }}
+          {{- with .Values.worker.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $full }}-config
+---
+# Service только для скрейпа /metrics воркера (ClusterIP, без нагрузочного трафика).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-worker
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+    codelens.io/scrape: "true"
+spec:
+  selector:
+    {{- include "codelens.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+  ports:
+    - name: http
+      port: {{ .Values.worker.metricsPort }}
+      targetPort: {{ .Values.worker.metricsPort }}
+{{- end }}

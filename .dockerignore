@@ -1,0 +1,25 @@
+# Не тащим в образ секреты, историю и тяжёлые/локальные артефакты.
+.git
+.gitignore
+.env
+.env.example
+.venv
+venv
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.chroma
+*.db
+cache/
+results.json
+index_chunks.json
+data/codebase/
+.streamlit
+.idea
+.claude
+deploy/
+docs/
+tests/
+*.md
+codelens.egg-info

@@ -1,0 +1,88 @@
+[project]
+name = "codelens"
+version = "0.1.0"
+description = "Семантический поиск по кодовой базе (RAG)"
+requires-python = ">=3.12"
+# Минимальное общее ядро (импортируется всегда). Тяжёлые пакеты (torch/chromadb/qdrant/redis/openai)
+# импортируются лениво внутри функций, поэтому в ядро не входят, а раскладываются по ролям ниже.
+dependencies = [
+  "pydantic>=2",
+  "pyyaml",
+  "python-dotenv",
+]
+
+[project.optional-dependencies]
+# Тонкий Streamlit-клиент (role=frontend) - без torch/fastapi/БД.
+frontend = ["streamlit", "streamlit-cookies-controller", "requests"]
+
+# Оркестратор (role=backend): FastAPI + ретривер (bm25/mmr in-process) + auth + remote-клиенты.
+# БЕЗ sentence-transformers/torch и chromadb - эмбеддер/реранкер удалённые, стор - qdrant (scale).
+backend = [
+  "fastapi", "uvicorn[standard]", "python-multipart", "requests", "numpy",
+  "sqlalchemy>=2.0", "alembic", "bm25s", "argon2-cffi", "pyjwt", "rq",
+  "codelens[parsers]",   # мультиязычные парсеры - по умолчанию (индексация)
+]
+
+# Драйверы стораджа/кэша профиля large.
+scale = ["qdrant-client", "psycopg[binary]", "redis", "prometheus-client"]
+
+# Мультиязычные парсеры (tree-sitter). Грамматики вшиты в wheel-ы (без рантайм-загрузок).
+# Регистрируются опционально: без этого extra работает только Python-парсер (ast).
+parsers = [
+  "tree-sitter>=0.23",
+  "tree-sitter-javascript", "tree-sitter-typescript", "tree-sitter-go",
+  "tree-sitter-java", "tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp",
+  "tree-sitter-rust", "tree-sitter-c-sharp", "tree-sitter-ruby", "tree-sitter-php",
+]
+
+# Воркер ingest (large): тот же пайплайн, что backend (парсеры тянет backend), + драйверы large. Без моделей.
+worker = ["codelens[backend,scale]"]
+
+# Inference-сервис (embedder/reranker): локальные модели.
+inference = ["sentence-transformers", "fastapi", "uvicorn[standard]", "prometheus-client"]
+
+# LLM-gateway.
+llm = ["fastapi", "uvicorn[standard]", "openai", "requests", "prometheus-client"]
+
+# Профиль all/small (один процесс, dev): локальные модели + chroma + локальный OpenAI-совместимый LLM
+# + мультиязычные парсеры (индексация в этом же процессе).
+local = ["sentence-transformers", "chromadb", "openai", "codelens[parsers]"]
+
+dev = ["ruff", "pytest", "mypy"]
+
+# Всё сразу - для локальной разработки (run/index/eval/test). Парсеры приходят из backend/local.
+all = ["codelens[frontend,backend,scale,inference,llm,local]"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "services*", "frontend*"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["D", "ANN"]
+ignore = [
+  "D104",    # докстринг в __init__.py пакета не требуется
+  "D107",    # докстринг __init__ не обязателен (покрывается докстрингом класса)
+  "ANN401",  # допускается typing.Any
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "ANN"]
+"migrations/**" = ["D", "ANN"]    # автогенерируемые alembic-ревизии
+
+# Статическая проверка типов (advisory, не в CI). Запуск: make typecheck
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true     # для torch/qdrant/chromadb и пр. нет стабов
+strict_optional = false           # поля composition root и lazy-init дефолтятся None; не считаем это ошибкой
+disable_error_code = ["annotation-unchecked"]
+exclude = ["tests/", "migrations/", "data/"]

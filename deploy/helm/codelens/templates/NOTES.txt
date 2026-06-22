@@ -1,0 +1,35 @@
+CodeLens ({{ .Values.profile }}) установлен как релиз "{{ .Release.Name }}" в namespace "{{ .Release.Namespace }}".
+
+Компоненты:
+  frontend  x{{ .Values.frontend.replicas }}   (Streamlit, :{{ .Values.frontend.port }})
+  backend   x{{ .Values.backend.replicas }}   (FastAPI, :{{ .Values.backend.port }})
+  embedder  x{{ .Values.embedder.replicas }}   (inference, INFERENCE_ROLE=embed)
+  llm       x{{ .Values.llm.replicas }}   (gateway, :{{ .Values.llm.port }})
+  reranker  {{ if .Values.reranker.enabled }}x{{ .Values.reranker.replicas }}{{ else }}выключен (без cross-encoder){{ end }}
+  qdrant    {{ if .Values.qdrant.enabled }}x{{ .Values.qdrant.replicas }}{{ if gt (int .Values.qdrant.replicas) 1 }} (cluster){{ end }}{{ else }}внешний{{ end }}
+  postgres  {{ if .Values.postgres.enabled }}CNPG x{{ .Values.postgres.instances }} (нужен оператор cnpg){{ else }}внешний{{ end }}
+  redis     {{ if .Values.redis.enabled }}x1{{ else }}внешний{{ end }}
+
+Предусловия large-профиля:
+  - оператор CloudNativePG (для postgres.enabled)
+  - ingress-controller (для ingress.enabled), запись host {{ .Values.ingress.host }} в DNS/hosts
+
+Миграции (alembic upgrade head) выполняются pre-install/upgrade hook на {{ include "codelens.fullname" . }}-pg-rw.
+{{- if .Values.indexJob.enabled }}
+Индексация корпуса запустится post-install hook ({{ .Values.indexJob.folder }}).
+{{- else }}
+Индексация: indexJob.enabled=true или запуск `python index.py` вручную в поде backend.
+{{- end }}
+
+Доступ:
+{{- if .Values.ingress.enabled }}
+  http://{{ .Values.ingress.host }}/
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "codelens.fullname" . }}-frontend {{ .Values.frontend.port }}:{{ .Values.frontend.port }}
+{{- end }}
+
+Smoke-тест на kind/minikube (урезать масштаб):
+  helm upgrade --install {{ .Release.Name }} deploy/helm/codelens \
+    --set qdrant.replicas=1 --set postgres.instances=1 \
+    --set backend.hpa.enabled=false --set frontend.hpa.enabled=false \
+    --set embedder.hpa.enabled=false --set llm.hpa.enabled=false

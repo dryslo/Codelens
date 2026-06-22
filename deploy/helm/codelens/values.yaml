@@ -1,0 +1,200 @@
+# Чарт обслуживает профиль large (k8s). Профиль small запускается без k8s:
+#   make run            - Streamlit-UI (один процесс, chroma+sqlite)
+#   make up / make down - docker compose (deploy/docker-compose.yml)
+# Эти values - дефолты large; на kind/minikube для smoke-теста масштаб уменьшается:
+#   --set qdrant.replicas=1 --set postgres.instances=1 --set backend.hpa.enabled=false
+profile: large
+
+image:
+  registry: ghcr.io/dryslo/codelens
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# --- Содержимое config.yaml (рендерится в ConfigMap; секреты - ссылки ${VAR}) ---
+config:
+  vector:
+    kind: qdrant
+    shards: 2
+    replicas: 2
+  embedder:
+    kind: remote
+    model: intfloat/multilingual-e5-large
+    dim: 1024
+    batch_size: 32
+  reranker:
+    enabled: false        # cross-encoder выключен по умолчанию (включается вместе с reranker-подом)
+    model: BAAI/bge-reranker-v2-m3
+  retrieval:
+    flags:                # off | ui | thinking | fast
+      bm25: ui
+      multiquery: ui
+      hyde: ui
+      rerank: "off"
+      mmr: ui
+  llm:
+    kind: remote          # remote -> backend/ретривер ходят в llm-gateway
+    fast: "Groq Llama 3.3 70B"
+    providers:
+      "Groq Llama 3.3 70B":
+        kind: openai_compatible
+        model: llama-3.3-70b-versatile
+        base_url: https://api.groq.com/openai/v1
+        api_key_env: GROQ_API_KEY
+  cache:
+    ttl: 3600
+  jobs:
+    kind: redis           # large: ingest исполняет worker-под (RQ); small/dev: inprocess
+  auth:
+    enabled: true
+    access_ttl: 900
+    refresh_ttl: 2592000
+
+# --- Секреты (Secret в кластере). В prod заменить на SOPS/sealed-secrets/external-secrets. ---
+secrets:
+  create: true
+  databaseDsn: ""         # пусто -> собирается из postgres.* на сервис -pg-rw
+  jwtSecret: dev-insecure-change-me-min-32-bytes!!   # дев-дефолт >=32 байт; в prod - реальный секрет
+  groqApiKey: ""
+  geminiApiKey: ""
+  adminLogin: admin
+  adminPassword: ""
+  hfToken: ""
+
+# --- Stateless-сервисы (Deployment+Service[+HPA]) ---
+frontend:
+  enabled: true
+  replicas: 2
+  image: frontend
+  port: 8501
+  healthPath: /_stcore/health
+  env:
+    - { name: ROLE, value: frontend }
+  resources: {}
+  nodeSelector: {}
+  hpa: { enabled: true, minReplicas: 2, maxReplicas: 4, cpu: 70 }
+
+backend:
+  enabled: true
+  replicas: 2
+  image: backend
+  port: 8080
+  healthPath: /healthz
+  metrics: true             # включает /metrics + scrape-лейбл на Service (для ServiceMonitor)
+  env:
+    - { name: ROLE, value: backend }
+  resources:
+    requests: { cpu: "500m", memory: 512Mi }
+    limits:   { cpu: "2",    memory: 2Gi }
+  nodeSelector: {}
+  hpa: { enabled: true, minReplicas: 2, maxReplicas: 8, cpu: 70 }
+
+embedder:
+  enabled: true
+  replicas: 2
+  image: inference        # тот же образ, что reranker; роль задаётся INFERENCE_ROLE
+  port: 8000
+  healthPath: /healthz
+  metrics: true
+  env:
+    - { name: INFERENCE_ROLE, value: embed }
+    - { name: EMBEDDER_MODEL, value: intfloat/multilingual-e5-large }
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits:   { cpu: "4", memory: 6Gi }
+  nodeSelector: {}        # на больших кластерах: { codelens.io/pool: heavy }
+  hpa: { enabled: true, minReplicas: 2, maxReplicas: 6, cpu: 70 }
+
+reranker:
+  enabled: false          # включается вместе с config.reranker.enabled
+  replicas: 0
+  image: inference
+  port: 8000
+  healthPath: /healthz
+  metrics: true
+  env:
+    - { name: INFERENCE_ROLE, value: rerank }
+    - { name: RERANKER_MODEL, value: BAAI/bge-reranker-v2-m3 }
+  resources: {}
+  nodeSelector: {}
+  hpa: { enabled: false }
+
+llm:
+  enabled: true
+  replicas: 2
+  image: llm
+  port: 8001
+  healthPath: /healthz
+  metrics: true
+  env: []
+  resources: {}
+  nodeSelector: {}
+  hpa: { enabled: true, minReplicas: 2, maxReplicas: 6, cpu: 70 }
+
+# Воркер ingest (RQ) - Deployment без Service/порта (тянет очередь из Redis).
+# Нужен при config.jobs.kind=redis. Параллелизм задаётся числом реплик (опц. KEDA по длине очереди).
+worker:
+  enabled: true
+  replicas: 1
+  image: worker
+  metricsPort: 9100         # /metrics воркера (отдельный порт + Service для скрейпа)
+  resources:
+    requests: { cpu: "500m", memory: 512Mi }
+    limits:   { cpu: "2",    memory: 2Gi }
+  nodeSelector: {}
+
+# --- Stateful ---
+qdrant:
+  enabled: true
+  image: qdrant/qdrant:v1.12.4
+  replicas: 3             # >1 включает QDRANT__CLUSTER__ENABLED + podAntiAffinity + bootstrap кластера
+  antiAffinity: hard      # hard: 1 под/узел (prod-HA); soft: предпочтительно (локалка с малым числом узлов)
+  storage: 50Gi
+  storageClass: ""        # пусто -> дефолтный (в k3s local-path; подходит для self-replicating БД, не Longhorn)
+  nodeSelector: {}        # large на k3s: { codelens.io/pool: data }
+  tolerations: []
+
+postgres:
+  enabled: true           # CNPG Cluster (требует установленного оператора CloudNativePG)
+  instances: 3            # HA: primary + 2 реплики (CNPG разносит по узлам сам)
+  storage: 20Gi
+  storageClass: ""
+  imageName: ""           # пусто -> дефолт оператора
+  database: codelens
+  user: codelens
+  password: codelens      # dev; в prod - через secrets/external
+  nodeSelector: {}        # large на k3s: { codelens.io/pool: data }
+  tolerations: []
+
+redis:
+  enabled: true
+  image: redis:7
+  storage: 5Gi
+  storageClass: ""
+
+ingress:
+  enabled: true
+  className: nginx
+  host: codelens.local
+  apiPath: true           # true -> /api/* проксируется на backend
+  authPath: false         # true -> /auth/* идёт на backend (single-origin httpOnly refresh-cookie)
+  annotations: {}
+
+# Job индексации корпуса (post-install/upgrade hook). По умолчанию выкл.
+indexJob:
+  enabled: false
+  folder: data/codebase
+  source: codebase
+
+# --- Наблюдаемость. Включать на кластере с установленным kube-prometheus-stack ---
+# (Prometheus Operator). Сам стек ставится отдельным Argo-приложением application-monitoring.yaml.
+monitoring:
+  enabled: false           # true -> рендерится ServiceMonitor + ConfigMap дашборда Grafana
+  serviceMonitor:
+    interval: 30s
+    # Лейблы, по которым Prometheus Operator отбирает ServiceMonitor'ы (serviceMonitorSelector).
+    # Для чарта kube-prometheus-stack по умолчанию это release-имя стека, напр.:
+    #   labels: { release: kube-prometheus-stack }
+    labels: {}
+  dashboards:
+    enabled: true          # ConfigMap с дашбордом (подхватывает grafana-сайдкар по лейблу)
+    label: grafana_dashboard   # sidecar.dashboards.label у kube-prometheus-stack

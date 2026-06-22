@@ -1,0 +1,93 @@
+# Единый конфиг. Профиль (small|large) и role задаются через переменные окружения.
+profile: ${PROFILE:-small}
+role: ${ROLE:-all}                 # all (один процесс, dev) | frontend | backend
+backend_url: ${BACKEND_URL:-http://backend:8080}
+
+embedder:
+  kind: ${EMBEDDER_KIND:-local}    # local (в процессе) | remote (inference-сервис)
+  # e5-large даёт лучший результат, чем FRIDA, на текущем корпусе (см. docs/retrieval-eval.md).
+  # При смене на ai-forever/FRIDA задать dim: 1536 и переиндексировать.
+  model: ${EMBEDDER_MODEL:-intfloat/multilingual-e5-large}
+  dim: ${EMBEDDER_DIM:-1024}
+  batch_size: ${EMBEDDER_BATCH:-32}   # размер батча для encode (throughput на индексации/eval)
+
+reranker:
+  enabled: ${RERANKER_ENABLED:-false}   # true => поднимает cross-encoder (тяжелее, но точнее)
+  kind: ${RERANKER_KIND:-local}
+  model: ${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+
+# Политика каналов поиска. На каждый канал один из режимов:
+#   off      - выключен принудительно (нет в UI, игнорируется в запросах)
+#   ui       - показывается тумблером в UI, выбор остаётся за пользователем
+#   thinking - авто-включается в режиме "thinking"
+#   fast     - включается в fast-пресете (и автоматически в thinking)
+# На small-корпусе добавочные каналы либо нейтральны, либо вредят
+# (см. docs/retrieval-eval.md), поэтому по умолчанию стоят "ui" и выключены.
+# На large-профиле имеет смысл попробовать bm25=fast, hyde/multiquery=thinking.
+retrieval:
+  flags:
+    bm25:       ${FLAG_BM25:-ui}
+    multiquery: ${FLAG_MULTIQUERY:-ui}
+    hyde:       ${FLAG_HYDE:-ui}
+    rerank:     ${FLAG_RERANK:-off}     # пользователь работает без cross-encoder
+    mmr:        ${FLAG_MMR:-ui}
+
+# Размещение моделей. inference_url - общий under-pod (role=all/compose); при разнесении
+# embedder/reranker по отдельным подам задать EMBEDDER_URL/RERANKER_URL (иначе фолбэк на inference_url).
+inference_url: ${INFERENCE_URL:-http://inference:8000}
+embedder_url: ${EMBEDDER_URL:-http://inference:8000}
+reranker_url: ${RERANKER_URL:-http://inference:8000}
+
+vector:
+  kind: ${VECTOR_KIND:-chroma}     # chroma (small) | qdrant (large)
+  path: ${CHROMA_PATH:-.chroma}
+  url: ${QDRANT_URL:-http://qdrant:6333}
+  shards: 2
+  replicas: 2
+
+database_dsn: ${DATABASE_DSN:-sqlite:///codelens.db}   # large: postgresql+psycopg://...
+redis_url: ${REDIS_URL:-}      # пусто -> кэш выключен (NullCache); иначе Redis (dev-fallback in-process)
+
+# Кэш: поиск (cache-aside в ретривере), ответы LLM, index-реестр (source+path->hash).
+cache:
+  ttl: ${CACHE_TTL:-3600}      # TTL записей кэша, сек
+
+# Очередь фоновых задач (ingest кодовой базы из админки: ZIP/GitHub).
+jobs:
+  kind: ${JOBS_KIND:-inprocess}   # inprocess (small/dev) | redis (large, RQ)
+
+# Авторизация (src/auth). enabled=false -> открытый dev-режим (anon=admin, без логина).
+# Модель: JWT access (в кэше, короткий) + refresh (в БД, длинный, ротация). Пароли - argon2,
+# в таблице credentials. OIDC-провайдеры - в identities (provider+subject). Первый админ -
+# из env ADMIN_LOGIN/ADMIN_PASSWORD. Секрет подписи JWT задаётся из env в проде.
+auth:
+  enabled: ${AUTH_ENABLED:-true}
+  jwt_secret: ${JWT_SECRET:-dev-insecure-change-me-min-32-bytes!!}   # дев-дефолт ≥32 байт (HS256)
+  jwt_alg: ${JWT_ALG:-HS256}
+  access_ttl: ${ACCESS_TTL:-900}        # сек (access в кэше)
+  refresh_ttl: ${REFRESH_TTL:-2592000}  # сек (refresh в БД)
+  oidc: {}                              # провайдеры: { google: {...}, keycloak: {...} } (oidc-ready)
+  # refresh в httpOnly+SameSite cookie (для браузера за single-origin reverse-proxy).
+  cookie_secure: ${AUTH_COOKIE_SECURE:-false}     # true в prod (HTTPS); иначе браузер не сохранит Secure-cookie
+  cookie_samesite: ${AUTH_COOKIE_SAMESITE:-lax}   # lax | strict | none
+  rate_limit_attempts: ${AUTH_RL_ATTEMPTS:-10}    # попыток login/register на IP за окно (0 - выкл)
+  rate_limit_window: ${AUTH_RL_WINDOW:-60}        # окно ограничителя частоты, сек
+
+# Ingest кодовой базы (ZIP/GitHub из админки).
+ingest:
+  max_upload_mb: ${MAX_UPLOAD_MB:-100}            # лимит размера ZIP-загрузки на уровне FastAPI
+
+llm:
+  # local - провайдеры строятся в процессе (small/dev); remote - backend/ретривер ходят в llm-gateway.
+  kind: ${LLM_KIND:-local}
+  llm_url: ${LLM_URL:-http://llm:8001}    # адрес gateway при kind=remote
+  fast: ${LLM_FAST:-Groq Llama 3.3 70B}   # имя быстрого провайдера для HyDE/MultiQuery/condense
+  providers:
+    "Groq Llama 3.3 70B":
+      kind: openai_compatible
+      model: llama-3.3-70b-versatile
+      base_url: https://api.groq.com/openai/v1
+      api_key_env: GROQ_API_KEY
+    # Примеры других провайдеров (для использования раскомментировать и заполнить):
+    #  "Qwen Coder 7B (локально)": { kind: ollama, model: qwen2.5-coder:7b, url: http://localhost:11434 }
+    #  "Gemini 2.5 Flash":         { kind: openai_compatible, model: gemini-2.5-flash, base_url: https://generativelanguage.googleapis.com/v1beta/openai/, api_key_env: GEMINI_API_KEY }

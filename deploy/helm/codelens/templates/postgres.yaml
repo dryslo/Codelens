@@ -1,0 +1,52 @@
+{{- if .Values.postgres.enabled -}}
+{{- $full := include "codelens.fullname" . -}}
+# Учётка владельца БД (basic-auth): CNPG берёт пароль отсюда, DATABASE_DSN в Secret - те же значения.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $full }}-pg-app
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+type: kubernetes.io/basic-auth
+stringData:
+  username: {{ .Values.postgres.user | quote }}
+  password: {{ .Values.postgres.password | quote }}
+---
+# CloudNativePG Cluster. Предусловие: оператор cnpg установлен в кластере.
+# Сервисы оператора: {{ $full }}-pg-rw (primary, DDL/миграции), -ro (реплики).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $full }}-pg
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.postgres.instances }}
+  {{- if .Values.postgres.imageName }}
+  imageName: {{ .Values.postgres.imageName | quote }}
+  {{- end }}
+  {{- if or .Values.postgres.nodeSelector .Values.postgres.tolerations }}
+  # CNPG сам разносит instances по узлам (enablePodAntiAffinity=true по умолчанию).
+  # Здесь лишь прибиваем их к data-узлам и снимаем taint'ы при необходимости.
+  affinity:
+    {{- with .Values.postgres.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.postgres.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  storage:
+    size: {{ .Values.postgres.storage }}
+    {{- if .Values.postgres.storageClass }}
+    storageClass: {{ .Values.postgres.storageClass | quote }}
+    {{- end }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgres.database }}
+      owner: {{ .Values.postgres.user }}
+      secret:
+        name: {{ $full }}-pg-app
+{{- end }}

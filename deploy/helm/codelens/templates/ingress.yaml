@@ -1,0 +1,44 @@
+{{- if .Values.ingress.enabled -}}
+{{- $full := include "codelens.fullname" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          {{- if .Values.ingress.apiPath }}
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $full }}-backend
+                port: { number: {{ .Values.backend.port }} }
+          {{- end }}
+          {{- if .Values.ingress.authPath }}
+          # single-origin: браузер бьёт /auth/* напрямую в backend (httpOnly refresh-cookie)
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $full }}-backend
+                port: { number: {{ .Values.backend.port }} }
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $full }}-frontend
+                port: { number: {{ .Values.frontend.port }} }
+{{- end }}

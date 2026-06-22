@@ -1,0 +1,78 @@
+# Overlay для локальной валидации на minikube. Накладывается поверх values.yaml:
+#   helm install codelens deploy/helm/codelens -f deploy/helm/codelens/values-local.yaml
+#
+# Отличия от large-дефолтов: масштаб ужат под ноутбук, HPA выключены (без metrics-server),
+# nodeSelector'ы НЕ заданы (на minikube нет меток pool/geo - иначе поды зависнут в Pending),
+# ingress выключен (доступ через kubectl port-forward), мониторинг выключен (нет Prometheus Operator).
+# qdrant.replicas=3 оставлено намеренно - именно это проверяет bootstrap кластера Qdrant.
+
+# Локальные образы: собираются make mk-images и грузятся в minikube как codelens/<svc>:local.
+image:
+  registry: codelens
+  tag: local
+  pullPolicy: IfNotPresent   # образ уже загружен в minikube - не тянуть из реестра
+
+# Дев-секреты для входа в админку (E2E ingest). LLM-ключи пустые: поиск/индексация работают без LLM,
+# чат-ответы будут заглушкой - для локальной проверки этого достаточно. Реальный ключ - через --set secrets.groqApiKey=...
+secrets:
+  create: true
+  jwtSecret: dev-insecure-change-me-min-32-bytes!!
+  adminLogin: admin
+  adminPassword: admin
+
+# --- Stateless: по одной реплике, HPA выключены ---
+frontend:
+  replicas: 1
+  hpa: { enabled: false }
+
+backend:
+  replicas: 1
+  hpa: { enabled: false }
+  resources:
+    requests: { cpu: "250m", memory: 384Mi }
+    limits:   { cpu: "1",    memory: 1Gi }
+
+# Эмбеддер тянет multilingual-e5-large (~2 ГБ вес + RAM). Одна реплика, заниженные лимиты.
+# Первый старт долгий (скачивание модели) - под будет не Ready несколько минут, это нормально.
+# Если ноутбук не тянет - на первом проходе можно --set embedder.enabled=false и проверить
+# чарт + Qdrant-кластер + CNPG отдельно от тяжёлого E2E.
+embedder:
+  replicas: 1
+  hpa: { enabled: false }
+  resources:
+    requests: { cpu: "500m", memory: 1500Mi }
+    limits:   { cpu: "2",    memory: 4Gi }
+
+llm:
+  replicas: 1
+  hpa: { enabled: false }
+
+worker:
+  replicas: 1
+  resources:
+    requests: { cpu: "250m", memory: 384Mi }
+    limits:   { cpu: "1",    memory: 1Gi }
+
+# --- Stateful: малые диски, дефолтный storageClass minikube (standard/hostpath) ---
+qdrant:
+  replicas: 3          # проверяем bootstrap кластера по hostname-ordinal
+  antiAffinity: soft   # на minikube узлов может быть <3 (память) - даём кластеру собраться, не залипая в Pending
+  storage: 2Gi
+  storageClass: ""     # пусто -> дефолтный StorageClass minikube
+
+postgres:
+  instances: 1         # дёшево; для проверки CNPG-HA поднять с --set postgres.instances=3
+  storage: 2Gi
+  storageClass: ""
+
+redis:
+  storage: 1Gi
+  storageClass: ""
+
+# Локально без ingress-контроллера: доступ через kubectl port-forward (см. deploy/minikube.md).
+ingress:
+  enabled: false
+
+# Нет Prometheus Operator в minikube - ServiceMonitor не рендерим.
+monitoring:
+  enabled: false

@@ -1,0 +1,12 @@
+# Prometheus для compose-демо панелей (профиль panels). Метки service/route/stage приходят из
+# самих метрик приложения (metrics.mount), job_name тут роли не играет.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: backend
+    static_configs:
+      - targets: ["backend:8080"]     # codelens_http_* / retrieval_* / cache_*
+  - job_name: worker
+    static_configs:
+      - targets: ["worker:9100"]      # codelens_ingest_*

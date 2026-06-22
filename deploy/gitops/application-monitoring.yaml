@@ -1,0 +1,44 @@
+# Argo CD Application - стек наблюдаемости (kube-prometheus-stack): Prometheus + Grafana +
+# Alertmanager + node-exporter + kube-state-metrics. Ставится один раз на кластер; приложение
+# CodeLens (staging/prod) отдаёт ServiceMonitor + ConfigMap-дашборд, которые этот стек
+# подхватывает. targetRevision - версия чарта, не образа; актуальная указана в репозитории чарта.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack          # = helm release name; на него можно завязать serviceMonitorSelector
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: codelens
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 65.5.0             # актуальная версия чарта
+    helm:
+      values: |
+        # Скрейпить все ServiceMonitor/PodMonitor в кластере, а не только с release-лейблом,
+        # чтобы ServiceMonitor подхватывался без дополнительных лейблов (для демо/staging удобно;
+        # на проде можно ужесточить и проставлять monitoring.serviceMonitor.labels вместо этого).
+        prometheus:
+          prometheusSpec:
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            retention: 7d
+        grafana:
+          defaultDashboardsTimezone: browser
+          sidecar:
+            dashboards:
+              enabled: true
+              label: grafana_dashboard     # = monitoring.dashboards.label в чарте
+              searchNamespace: ALL         # искать ConfigMap-дашборды во всех namespace
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true          # большие CRD kube-prometheus-stack -> server-side apply

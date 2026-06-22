@@ -1,0 +1,27 @@
+{{- if .Values.monitoring.enabled }}
+# ServiceMonitor - декларация для Prometheus Operator (kube-prometheus-stack):
+# «скрейпь /metrics на порту http у всех Service с лейблом codelens.io/scrape=true в этом namespace».
+# Operator подхватывает ServiceMonitor только если его лейблы попадают под serviceMonitorSelector
+# стека - задай их в monitoring.serviceMonitor.labels (обычно { release: <имя-стека> }).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "codelens.fullname" . }}
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "codelens.selectorLabels" . | nindent 6 }}
+      codelens.io/scrape: "true"
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+{{- end }}

@@ -1,0 +1,115 @@
+name: CI/CD
+on:
+  pull_request: {}
+  push:
+    branches: [dev, main]
+
+# contents:write - job bump-tag коммитит image.tag обратно в репо.
+# packages:write - push образов в GHCR.
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('pyproject.toml') }}
+      - run: pip install -e ".[all,dev]"   # полный набор (как make install): тесты + eval-гейт
+      - run: ruff check .
+      - run: pytest -q
+      - run: alembic upgrade head            # миграции на чистой sqlite
+      # Гейт качества Precision@5: корпус data/codebase в репозитории, индекс собирается на месте.
+      # Деплой не пройдёт, если precision ниже порога.
+      - run: |
+          python index.py data/codebase
+          python evaluate.py --assert-min 0.60
+
+  # Валидация Helm-чарта: рендер всех overlay'ев + kubeconform (схемы k8s + CRD CNPG).
+  # Ловит ошибки манифестов до выката; CRD-схемы тянутся из datreeio/CRDs-catalog.
+  helm-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz kubeconform && sudo mv kubeconform /usr/local/bin/
+      - name: Lint + template + kubeconform
+        run: |
+          CHART=deploy/helm/codelens
+          helm lint $CHART
+          for v in values-local values-staging values-prod; do
+            echo "== $v =="
+            helm template $CHART -f $CHART/$v.yaml | kubeconform -strict -summary -ignore-missing-schemas \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          done
+
+  # Сборка и публикация образов в GHCR. Тег = git-SHA (иммутабельный, требуется для GitOps).
+  # Деплой-джобы (build-push, bump-tag) спят, пока нет кластера: включаются repo-переменной
+  # DEPLOY_ENABLED=true (GitHub → Settings → Secrets and variables → Actions → Variables).
+  # До этого push в main/dev гоняет только quality + helm-validate, образы в GHCR не публикуются.
+  build-push:
+    needs: quality
+    if: github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [frontend, backend, inference, llm, worker]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lowercase repo name           # GHCR требует lowercase в пути образа
+        id: repo
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.${{ matrix.service }}
+          push: true
+          tags: ghcr.io/${{ steps.repo.outputs.name }}/${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Деплой выполняется не здесь: image.tag бампится в overlay и коммитится, что синхронизирует Argo CD.
+  # dev -> values-staging.yaml, main -> values-prod.yaml.
+  bump-tag:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Select env overlay
+        id: env
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "file=deploy/helm/codelens/values-prod.yaml"    >> "$GITHUB_OUTPUT"
+            echo "name=prod"    >> "$GITHUB_OUTPUT"
+          else
+            echo "file=deploy/helm/codelens/values-staging.yaml" >> "$GITHUB_OUTPUT"
+            echo "name=staging" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Bump image.tag to ${{ github.sha }}
+        run: yq -i '.image.tag = "${{ github.sha }}"' "${{ steps.env.outputs.file }}"
+      - name: Commit and push
+        run: |
+          git config user.name  "codelens-ci"
+          git config user.email "ci@codelens.local"
+          git add "${{ steps.env.outputs.file }}"
+          # [skip ci] - чтобы этот коммит не запускал workflow повторно (бесконечный цикл).
+          git commit -m "ci(${{ steps.env.outputs.name }}): bump image.tag ${GITHUB_SHA::12} [skip ci]" \
+            || { echo "image.tag не изменился - нечего коммитить"; exit 0; }
+          git push

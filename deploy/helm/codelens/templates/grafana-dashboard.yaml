@@ -1,0 +1,15 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.dashboards.enabled }}
+# Дашборд Grafana как ConfigMap. Grafana-сайдкар kube-prometheus-stack автоматически
+# импортирует любой ConfigMap с лейблом monitoring.dashboards.label (по умолчанию
+# grafana_dashboard); отдельная провизия не требуется.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "codelens.fullname" . }}-dashboard
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    {{ .Values.monitoring.dashboards.label }}: "1"
+data:
+  codelens.json: |-
+    {{- .Files.Get "dashboards/codelens.json" | nindent 4 }}
+{{- end }}

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: codelens
+description: CodeLens - RAG-поиск по коду. Один чарт на small/large; различие задаётся через values.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [rag, code-search, retrieval]

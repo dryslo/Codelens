@@ -1,0 +1,52 @@
+# Overlay для k3s на самоуправляемых VPS. Накладывается поверх values.yaml и env-overlay, последним:
+#   helm.valueFiles: [values.yaml, values-prod.yaml, values-k3s.yaml]
+# Описывает инфраструктурную специфику k3s + раскладку подов по узлам (метки/taint'ы - см.
+# deploy/k3s-setup.md). Прикладные настройки (масштаб, флаги) остаются в базовом/env-overlay.
+
+# k3s по умолчанию ставит Traefik, а не ingress-nginx. Либо Traefik, либо при установке k3s
+# `--disable traefik` и установка ingress-nginx, тогда className: nginx.
+ingress:
+  className: traefik
+
+# HA данных на 3 data-узлах. Qdrant и CNPG-Postgres реплицируют сами на уровне приложения, поэтому
+# каждому поду нужен свой локальный диск (local-path), не Longhorn (иначе двойная репликация впустую).
+# qdrant.replicas должно совпадать с числом data-узлов (podAntiAffinity жёсткая: лишний под зависнет
+# в Pending). shards/replicas коллекции (фактор шардирования/репликации) - в config.vector ниже.
+config:
+  vector:
+    shards: 2
+    replicas: 2        # фактор репликации коллекции: каждый шард в 2 копиях на разных узлах
+qdrant:
+  replicas: 3          # = числу data-узлов
+  nodeSelector: { codelens.io/pool: data }
+postgres:
+  instances: 3         # primary + 2 hot-standby; CNPG разносит по узлам и делает failover
+  nodeSelector: { codelens.io/pool: data }
+redis:
+  enabled: true        # одиночный (кэш + очередь RQ); не реплицируется - допустимо
+
+# --- Раскладка тяжёлых/особых подов по выделенным узлам ---
+
+# embedder -> мощный узел (CPU+RAM под multilingual-e5-large).
+#   узел:  kubectl label node <node> codelens.io/pool=heavy
+#          kubectl taint node <node> dedicated=embedder:PreferNoSchedule   # мягко отводим чужие поды
+# nodeSelector притягивает embedder сюда (жёстко), toleration снимает с него действие taint'а.
+embedder:
+  replicas: 1                 # один heavy-узел -> одна реплика (2 пода = двойная загрузка модели -> OOM)
+  hpa: { enabled: false }     # масштабировать некуда, пока heavy-узел один; при добавлении узлов - включить
+  nodeSelector:
+    codelens.io/pool: heavy
+  tolerations:
+    - { key: dedicated, operator: Equal, value: embedder, effect: PreferNoSchedule }
+
+# llm -> узел в Европе (внешние API Groq/Gemini доступны оттуда). Прикладных данных не несёт.
+#   узел:  kubectl label node <node-eu> geo=eu
+#          kubectl taint node <node-eu> dedicated=llm:NoSchedule          # жёстко: РФ-поды сюда нельзя
+# nodeSelector geo=eu - жёсткая привязка (в РФ llm бессмысленен); toleration пускает llm на taint'нутый узел.
+llm:
+  replicas: 1                 # один EU-узел -> одна реплика
+  hpa: { enabled: false }     # gateway лёгкий (вся генерация на стороне Groq/Gemini)
+  nodeSelector:
+    geo: eu
+  tolerations:
+    - { key: dedicated, operator: Equal, value: llm, effect: NoSchedule }

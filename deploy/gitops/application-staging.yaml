@@ -1,0 +1,30 @@
+# Argo CD Application - staging. Поддерживает namespace codelens-staging в точности равным
+# тому, что рендерит Helm-чарт deploy/helm/codelens на ветке dev.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: codelens-staging
+  namespace: argocd
+  finalizers:
+    # При удалении Application каскадно удаляются (prune) все его ресурсы из кластера.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: codelens
+  source:
+    repoURL: https://github.com/dryslo/Codelens.git
+    targetRevision: dev                               # staging едет за веткой dev
+    path: deploy/helm/codelens
+    helm:
+      valueFiles:
+        - values.yaml             # база (large-дефолты)
+        - values-staging.yaml     # overlay: меньше масштаб + image.tag от CI
+  destination:
+    server: https://kubernetes.default.svc            # тот же кластер, где работает Argo
+    namespace: codelens-staging
+  syncPolicy:
+    automated:
+      prune: true        # ресурс убран из git -> Argo удаляет его из кластера
+      selfHeal: true     # ручная правка кластера -> Argo откатывает к git (борьба с дрейфом)
+    syncOptions:
+      - CreateNamespace=true     # namespace создаёт сам Argo
+      - ApplyOutOfSyncOnly=true  # применять только изменившиеся объекты

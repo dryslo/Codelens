@@ -1,0 +1,1 @@
+{{- include "codelens.workload" (dict "root" . "name" "reranker" "spec" .Values.reranker) }}
