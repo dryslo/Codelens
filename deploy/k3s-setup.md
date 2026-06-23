@@ -142,6 +142,18 @@ DNS-записи `codelens.fun` и `staging.codelens.fun` (по 3 A-записи
 s1/s2/s3, TTL 60s - без single-IP SPOF) должны резолвиться до применения issuer, иначе ACME
 HTTP-01 не подтвердит домен (cert-manager будет ретраить).
 
+### Argo CD UI за forward-auth
+Свой логин Argo выключается, доступ гейтит тот же `role=admin`, что Grafana/pgAdmin (UI под
+`/argocd` на host приложения). Применять после установки Argo и подъёма staging:
+```bash
+kubectl -n argocd patch cm argocd-cmd-params-cm --type merge \
+  -p '{"data":{"server.insecure":"true","server.rootpath":"/argocd","server.disable.auth":"true"}}'
+kubectl -n argocd rollout restart deploy/argocd-server
+kubectl apply -f deploy/gitops/argocd-ingress.yaml
+```
+UI: `https://staging.codelens.fun/argocd` под admin-сессией. (Иначе - port-forward `svc/argocd-server`
+и пароль из `secret/argocd-initial-admin-secret`.)
+
 ## 5. Секреты (sealed-secrets)
 ```bash
 # deploy/gitops/sealed/secrets.prod.env с реальными значениями (в .gitignore), затем:

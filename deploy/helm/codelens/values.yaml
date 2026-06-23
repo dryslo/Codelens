@@ -48,6 +48,10 @@ config:
     enabled: true
     access_ttl: 900
     refresh_ttl: 2592000
+  # OIDC-провайдеры (вход через внешний IdP). clientId публичен (уходит на фронт), не секрет.
+  oidc:
+    google:
+      clientId: ""        # Google OAuth Web client_id. Пусто -> кнопка Google-входа скрыта.
 
 # --- Секреты (Secret в кластере). В prod заменить на SOPS/sealed-secrets/external-secrets. ---
 secrets:
@@ -59,8 +63,6 @@ secrets:
   adminLogin: admin
   adminPassword: ""
   hfToken: ""
-  pgadminEmail: admin@codelens.com   # учётка самого pgAdmin (панель dbadmin); доступ всё равно гейтит role=admin
-  pgadminPassword: ""                  # задать при dbadmin.enabled (в prod - через sealed-secrets)
 
 # --- Stateless-сервисы (Deployment+Service[+HPA]) ---
 frontend:
@@ -196,6 +198,8 @@ dbadmin:
   storageClass: ""
   resources: {}
   qdrant: true            # добавить путь /qdrant к дашборду Qdrant за тем же гейтом (см. caveat в доке)
+  nodeSelector: {}        # на k3s со staging-узлом: { codelens.io/env: staging }
+  tolerations: []
 
 # Job индексации корпуса (post-install/upgrade hook). По умолчанию выкл.
 indexJob:

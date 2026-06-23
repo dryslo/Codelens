@@ -43,11 +43,11 @@ Refresh дополнительно кладётся в httpOnly+SameSite cookie 
 | `oidc.py` | `verify_id_token` (JWKS провайдера) → `login_with_id_token` → `AuthService.login_oidc` |
 | `deps.py` | `get_current_user`, `require_user`/`require_admin` - общие зависимости на группы роутеров |
 | `ratelimit.py` | `allow` - fixed-window ограничитель частоты для login/register (счётчик в кэше) |
-| `router.py` | публичный `/auth/*`: register, login, refresh, oidc, forward-auth, me, logout |
+| `router.py` | публичный `/auth/*`: register, login, refresh, oidc, oidc/{provider}/callback, forward-auth, me, logout |
 
 ## Группировка роутов (backend_app.py)
 
-- **public** - `/auth/{register,login,refresh,oidc}`, `/healthz`, `/flag-policy`.
+- **public** - `/auth/{register,login,refresh,oidc,oidc/{provider}/callback}`, `/healthz`, `/flag-policy`.
 - **protected** - `APIRouter(dependencies=[Depends(require_user)])`: `/search`, `/chat`, `/chats`,
   `/llms`, `/answer` (+ `/auth/me`, `/auth/logout`). Чаты скоупятся по `current_user.user_id`.
 - **admin** (`src/admin/router.py`) - `APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])`:
@@ -65,12 +65,28 @@ Refresh дополнительно кладётся в httpOnly+SameSite cookie 
 `X-Auth-User`/`X-Auth-Role`: nginx копирует их в проксируемый запрос, а Grafana через `auth.proxy`
 опознаёт пользователя по ним. Refresh резолвится read-only (`resolve_refresh`, без ротации).
 
-## OIDC (заточка)
+## OIDC (Google + точка расширения)
 
-`/auth/oidc/{provider}` принимает `id_token` → `oidc.verify_id_token` проверяет его по JWKS
+Ядро - `/auth/oidc/{provider}`: принимает `id_token` → `oidc.verify_id_token` проверяет его по JWKS
 провайдера (`config.yaml → auth.oidc.<provider>.{jwks_url, issuer, audience}`) → `sub` →
 `AuthService.login_oidc(provider, subject, claims)` находит/создаёт пользователя через identities
 и выдаёт access+refresh. Новые провайдеры добавляются конфигом, без правок кода.
+
+**Google** доведён до рабочего входа. Из-за iframe-ограничений Streamlit фронт не передаёт токен в
+Python напрямую, а используется поток Google Identity Services `ux_mode=redirect`:
+
+1. На экране входа - кнопка GIS (рендерится, если задан `auth.oidc.google.clientId`). `<base
+   target="_top">` уводит сабмит формы из component-iframe в верхнее окно.
+2. Google постит `credential` (id_token) на `login_uri` =
+   `https://<host>/auth/oidc/google/callback`.
+3. `/auth/oidc/{provider}/callback` проверяет CSRF (double-submit cookie `g_csrf_token`),
+   верифицирует id_token тем же `login_with_id_token`, ставит refresh-куку и редиректит на `/`.
+4. Фронт подхватывает сессию по куке (как при F5).
+
+Конфиг рендерится из `config.oidc.google.clientId` (публичен): `audience`/`jwks_url`/`issuer` читает
+бэкенд, `clientId`/`login_uri` - фронт. `clientId` пуст → кнопка скрыта. В `ingress` нужен
+`authPath: true`, чтобы `/auth/*` (с callback) проксировался на backend. GitHub - не OIDC (нет
+id_token/JWKS), потребовал бы отдельного OAuth2 code-flow.
 
 ## Где собирается
 

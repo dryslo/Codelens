@@ -19,9 +19,13 @@ config:
   vector:
     shards: 1
     replicas: 1
+  oidc:
+    google:
+      clientId: "657334521650-f06agmbiql4mj5adn1u5ffr3lolvk1pq.apps.googleusercontent.com"
 ingress:
   className: traefik # тот же k3s, что и prod (по умолчанию traefik); база ставит nginx
   host: staging.codelens.fun
+  authPath: true # /auth/* -> backend (нужно для callback Google OIDC)
   tls: true
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod # тот же issuer, что и prod
@@ -85,3 +89,19 @@ llm:
 # Генерация: deploy/gitops/sealed/seal.sh staging. Подробно - deploy/gitops/sealed/README.md.
 secrets:
   create: false
+
+# БД-панель pgAdmin за forward-auth (role=admin) на staging.codelens.fun/pgadmin.
+# qdrant=false: дашборд Qdrant под субпутём ломается (см. dbadmin-ingress), для демо не нужен.
+# Своего логина у pgAdmin нет (desktop-режим), единственный гейт - forward-auth; секрет не нужен.
+dbadmin:
+  enabled: true
+  qdrant: false
+  nodeSelector: {codelens.io/env: staging}
+  tolerations:
+    - {key: dedicated, operator: Equal, value: staging, effect: NoSchedule}
+
+# Наблюдаемость: рендерит ServiceMonitor (скрейп /metrics backend) + ConfigMap-дашборд Grafana.
+# Их подхватывает kube-prometheus-stack (application-monitoring.yaml). serviceMonitor.labels пустые -
+# стек настроен на serviceMonitorSelectorNilUsesHelmValues=false (берёт все ServiceMonitor).
+monitoring:
+  enabled: true

@@ -105,8 +105,10 @@ kube-state-metrics) один раз на кластер в namespace `monitoring
   По умолчанию kube-prometheus-stack скрейпит только `ServiceMonitor`/`PodMonitor` со своим
   release-лейблом; здесь он берёт все, чтобы `ServiceMonitor` чарта подхватывался без проставления
   лейблов (удобно для демо/staging). На проде селектор можно ужесточить обратно и проставлять
-  `monitoring.serviceMonitor.labels` в чарте. Там же `retention: 7d` и grafana-сайдкар, ищущий
+  `monitoring.serviceMonitor.labels` в чарте. Там же `retention: 3d`, выключенный Alertmanager
+  (`alertmanager.enabled: false` - для демо алерты не нужны) и grafana-сайдкар, ищущий
   ConfigMap-дашборды во всех namespace (`searchNamespace: ALL`, label `grafana_dashboard`).
+- `helm.values` также выставляют Grafana под субпуть и за гейт (см. ниже).
 - `syncOptions` дополнительно содержит `ServerSideApply=true` - крупные CRD kube-prometheus-stack
   применяются server-side, чтобы не упереться в лимит размера аннотации client-side apply.
 
@@ -114,3 +116,20 @@ kube-state-metrics) один раз на кластер в namespace `monitoring
 `serviceMonitorSelector`, если позже понадобится сузить отбор.
 
 Какие метрики отдаёт CodeLens и как они попадают в этот стек - в [../../util/observability.md](../../util/observability.md).
+
+## Grafana и Argo CD UI за forward-auth
+
+Обе панели открываются по тому же гейту `role=admin`, что pgAdmin (Traefik `Middleware` типа
+`forwardAuth` на `/auth/forward-auth` backend'а), и на том же host, что приложение - иначе host-only
+refresh-кука до них не дойдёт.
+
+- **Grafana** - в `helm.values` стека: `grafana.ini` с `serve_from_sub_path: true` и `root_url`
+  `https://<host>/grafana` (Grafana сама держит префикс, stripPrefix не нужен), форма логина выключена,
+  внутри анонимный `Admin` (доступ уже отфильтровал forward-auth). `grafana.ingress` ставит Ingress на
+  `/grafana` с middleware-аннотацией, а `grafana.extraObjects` - сам `Middleware` `grafana-forward-auth`
+  в namespace `monitoring` (его `forwardAuth.address` бьёт кросс-namespace в backend `codelens-staging`).
+- **Argo CD** - [../../../deploy/gitops/argocd-ingress.yaml](../../../deploy/gitops/argocd-ingress.yaml):
+  `Middleware` + Ingress под `/argocd`. Свой логин Argo выключается параметрами
+  `argocd-cmd-params-cm` (`server.disable.auth`, `server.insecure`, `server.rootpath: /argocd`),
+  TLS терминирует Traefik. Применяется после установки Argo (команды - в заголовке файла и
+  [../../k3s-setup.md](../../k3s-setup.md)). Так же, как Grafana: один гейт, без второй формы входа.

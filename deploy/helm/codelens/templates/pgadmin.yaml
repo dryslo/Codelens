@@ -39,6 +39,14 @@ spec:
     spec:
       securityContext:
         fsGroup: 5050             # uid/gid пользователя pgadmin - чтобы PVC был доступен на запись
+      {{- with .Values.dbadmin.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dbadmin.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: pgadmin
           image: {{ .Values.dbadmin.image }}
@@ -53,12 +61,10 @@ spec:
             - { name: PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED, value: "False" }
             - { name: PGADMIN_CONFIG_PROXY_X_HOST_COUNT, value: "1" }
             - { name: PGADMIN_CONFIG_PROXY_X_PREFIX_COUNT, value: "1" }
-            - name: PGADMIN_DEFAULT_EMAIL
-              valueFrom:
-                secretKeyRef: { name: {{ include "codelens.secretName" . }}, key: PGADMIN_DEFAULT_EMAIL }
-            - name: PGADMIN_DEFAULT_PASSWORD
-              valueFrom:
-                secretKeyRef: { name: {{ include "codelens.secretName" . }}, key: PGADMIN_DEFAULT_PASSWORD }
+            # В desktop-режиме логина нет, эти значения для входа не используются (гейт - forward-auth).
+            # Держим плейн-env: email обязан быть валидным (иначе pgAdmin падает на старте), пароль - заглушка.
+            - { name: PGADMIN_DEFAULT_EMAIL, value: "admin@codelens.com" }
+            - { name: PGADMIN_DEFAULT_PASSWORD, value: "desktop-mode-no-login" }
           readinessProbe:
             tcpSocket: { port: 80 }     # tcp, а не httpGet: путь зависит от X-Script-Name, которого у пробы нет
             initialDelaySeconds: 15

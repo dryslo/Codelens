@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, cast
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 
 from src.auth import ratelimit
 from src.auth.deps import bearer_token, get_auth, get_current_user
@@ -92,6 +93,27 @@ def oidc(provider: str, response: Response, id_token: str = Body(..., embed=True
         raise HTTPException(status_code=401, detail=res["error"])
     _set_refresh_cookie(response, auth, res.get("refresh_token", ""))
     return res
+
+
+@router.post("/oidc/{provider}/callback")
+def oidc_callback(provider: str, request: Request, credential: str = Form(...),
+                  g_csrf_token: str = Form(default=""),
+                  auth: AuthService = Depends(get_auth)) -> Response:
+    """Принять GIS-callback (ux_mode=redirect): по credential выдать сессию и увести на фронт.
+
+    Браузер постит сюда credential (id_token) и g_csrf_token. Проверяем CSRF (double-submit cookie),
+    логиним по id_token, ставим refresh-cookie и редиректим на корень фронта - дальше сессию
+    подхватывает фронт по куке (как при F5).
+    """
+    cookie_csrf = request.cookies.get("g_csrf_token")
+    if not cookie_csrf or cookie_csrf != g_csrf_token:
+        raise HTTPException(status_code=400, detail="oidc csrf check failed")
+    res = login_with_id_token(auth, provider, credential)
+    if "error" in res:
+        raise HTTPException(status_code=401, detail=res["error"])
+    redirect = RedirectResponse(url="/", status_code=303)
+    _set_refresh_cookie(redirect, auth, res.get("refresh_token", ""))
+    return redirect
 
 
 @router.get("/forward-auth")

@@ -28,6 +28,13 @@ redis:
   enabled: true        # одиночный (кэш + очередь RQ); не реплицируется - допустимо
   nodeSelector: { codelens.io/pool: data }   # держим на data-узлах, прочь от node-dev (staging)
 
+# pgAdmin за forward-auth (role=admin) на codelens.fun/pgadmin. На data-узлах (нет node-dev в prod).
+# qdrant=false - дашборд Qdrant под субпутём не работает (см. dbadmin-ingress).
+dbadmin:
+  enabled: true
+  qdrant: false
+  nodeSelector: { codelens.io/pool: data }
+
 # --- Масштаб под 6 ГБ data-узлы (vs 16 ГБ в эталонной топологии) ---
 # На каждом data-узле живут qdrant + postgres + доля stateless. После ОС+k3s-server(etcd) свободно
 # ~4.5 ГБ, поэтому stateless урезан по памяти и HPA, чтобы всплеск реплик не выбивал БД по OOM.

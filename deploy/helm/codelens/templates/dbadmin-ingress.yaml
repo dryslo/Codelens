@@ -1,12 +1,111 @@
 {{- if and .Values.dbadmin.enabled .Values.ingress.enabled -}}
 {{- $full := include "codelens.fullname" . -}}
-{{- $authUrl := printf "http://%s-backend.%s.svc.cluster.local:%v/auth/forward-auth" $full .Release.Namespace .Values.backend.port -}}
-# Гейт-Ingress админ-панелей: forward-auth (role=admin в БД) перед pgAdmin и дашбордом Qdrant.
-# Тот же host, что приложение (refresh-кука path=/ на одном домене). Реализация - ingress-nginx
-# (external auth + rewrite). Для traefik (overlay k3s) аналог - Middleware forwardAuth, см. values-k3s.
-#
-# pgAdmin и Qdrant - РАЗНЫЕ Ingress: у pgAdmin свой configuration-snippet (X-Script-Name), который
-# нельзя навешивать на путь Qdrant.
+{{- $ns := .Release.Namespace -}}
+{{- $authUrl := printf "http://%s-backend.%s.svc.cluster.local:%v/auth/forward-auth" $full $ns .Values.backend.port -}}
+# Гейт админ-панелей: forward-auth (role=admin в БД) перед pgAdmin (и опц. дашбордом Qdrant).
+# Тот же host, что приложение (refresh-кука path=/ на одном домене). Две реализации по ingress.className:
+# traefik (overlay k3s) - Middleware forwardAuth + stripPrefix; nginx - external-auth аннотации.
+{{- if eq .Values.ingress.className "traefik" }}
+# ---------- Traefik ----------
+# Цепочка middleware на /pgadmin: forwardAuth (гейт) -> headers (X-Script-Name=/pgadmin для генерации
+# ссылок pgAdmin) -> stripPrefix (снять /pgadmin перед проксированием). Порядок важен.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $full }}-forward-auth
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+spec:
+  forwardAuth:
+    address: {{ printf "http://%s-backend:%v/auth/forward-auth" $full .Values.backend.port | quote }}
+    authResponseHeaders:
+      - X-Auth-User
+      - X-Auth-Role
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $full }}-pgadmin-headers
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+spec:
+  headers:
+    customRequestHeaders:
+      X-Script-Name: /pgadmin
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $full }}-pgadmin-strip
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+spec:
+  stripPrefix:
+    prefixes:
+      - /pgadmin
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}-pgadmin
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgadmin
+  annotations:
+    # forwardAuth -> headers -> stripPrefix (в этом порядке)
+    traefik.ingress.kubernetes.io/router.middlewares: "{{ $ns }}-{{ $full }}-forward-auth@kubernetescrd,{{ $ns }}-{{ $full }}-pgadmin-headers@kubernetescrd,{{ $ns }}-{{ $full }}-pgadmin-strip@kubernetescrd"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /pgadmin
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $full }}-pgadmin
+                port: { number: 80 }
+{{- if .Values.dbadmin.qdrant }}
+---
+# CAVEAT: UI Qdrant ходит в API по корне-относительным путям (/collections, /cluster) - под субпутём
+# /qdrant часть запросов уйдёт мимо. На субдомен refresh-кука (host-only) не дойдёт. Для демо qdrant
+# держим выключенным; этот блок - на случай dbadmin.qdrant=true (нужна доводка под живой кластер).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $full }}-qdrant-strip
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+spec:
+  stripPrefix:
+    prefixes:
+      - /qdrant
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $full }}-qdrant-dashboard
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: qdrant
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: "{{ $ns }}-{{ $full }}-forward-auth@kubernetescrd,{{ $ns }}-{{ $full }}-qdrant-strip@kubernetescrd"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /qdrant
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $full }}-qdrant
+                port: { number: 6333 }
+{{- end }}
+{{- else }}
+# ---------- ingress-nginx ----------
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -37,9 +136,6 @@ spec:
                 port: { number: 80 }
 {{- if .Values.dbadmin.qdrant }}
 ---
-# Дашборд Qdrant за тем же гейтом. CAVEAT: UI Qdrant ходит в API по корне-относительным путям
-# (/collections, /cluster), поэтому под субпутём /qdrant часть запросов может не разрешиться -
-# проверить на живом кластере; надёжный вариант - отдельный host (qdrant.<домен>) в корне.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -66,5 +162,6 @@ spec:
               service:
                 name: {{ $full }}-qdrant
                 port: { number: 6333 }
+{{- end }}
 {{- end }}
 {{- end }}

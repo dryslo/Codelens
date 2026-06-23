@@ -79,8 +79,6 @@ stringData:
   ADMIN_LOGIN: {{ .Values.secrets.adminLogin | quote }}
   ADMIN_PASSWORD: {{ .Values.secrets.adminPassword | quote }}
   HF_TOKEN: {{ .Values.secrets.hfToken | quote }}
-  PGADMIN_DEFAULT_EMAIL: {{ .Values.secrets.pgadminEmail | quote }}
-  PGADMIN_DEFAULT_PASSWORD: {{ .Values.secrets.pgadminPassword | quote }}
 ```
 
 Ключи:
@@ -93,10 +91,9 @@ stringData:
 - `ADMIN_LOGIN` / `ADMIN_PASSWORD` - первый администратор (создаётся при первом старте, см. блок
   `auth` в [`config.yaml`](../../../../config/config.yaml)).
 - `HF_TOKEN` - токен Hugging Face для загрузки моделей embedder/reranker.
-- `PGADMIN_DEFAULT_EMAIL` / `PGADMIN_DEFAULT_PASSWORD` - требуются entrypoint'у pgAdmin (панель
-  `dbadmin`), но для входа не используются: pgAdmin поднят в desktop-режиме (`SERVER_MODE=False`),
-  без собственного логина. Нужны только при `dbadmin.enabled`; их читает [pgadmin.yaml](#pgadminyaml---админ-панель-postgres-за-forward-auth)
-  через `secretKeyRef`. Единственный гейт доступа - `role=admin` через forward-auth.
+
+Учётки pgAdmin в секрете нет: панель в desktop-режиме без логина, email/пароль задаются прямо в
+[pgadmin.yaml](#pgadminyaml---админ-панель-postgres-за-forward-auth) плейн-env (для входа не нужны).
 
 Имена ключей - контракт: они должны совпадать с `${VAR}` в ConfigMap и с `api_key_env` провайдеров,
 иначе подстановка в подах даст пустое значение.
@@ -155,10 +152,8 @@ spec:
         - { name: PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED, value: "False" }
         - { name: PGADMIN_CONFIG_PROXY_X_HOST_COUNT, value: "1" }
         - { name: PGADMIN_CONFIG_PROXY_X_PREFIX_COUNT, value: "1" }
-        - name: PGADMIN_DEFAULT_EMAIL
-          valueFrom: { secretKeyRef: { name: <release>-secrets, key: PGADMIN_DEFAULT_EMAIL } }
-        - name: PGADMIN_DEFAULT_PASSWORD
-          valueFrom: { secretKeyRef: { name: <release>-secrets, key: PGADMIN_DEFAULT_PASSWORD } }
+        - { name: PGADMIN_DEFAULT_EMAIL, value: "admin@codelens.com" }      # должен быть валидным, иначе старт падает
+        - { name: PGADMIN_DEFAULT_PASSWORD, value: "desktop-mode-no-login" }  # заглушка: в desktop-режиме не для входа
       readinessProbe:
         tcpSocket: { port: 80 }
 ```
@@ -168,8 +163,8 @@ spec:
 - **fsGroup: 5050** - uid/gid пользователя контейнера pgAdmin; без него смонтированный PVC окажется
   недоступен на запись, и панель не стартует.
 - **Без логина pgAdmin** (`SERVER_MODE=False`, desktop-режим): второй формы входа нет, гейт один -
-  `role=admin` через ingress forward-auth. `PGADMIN_DEFAULT_EMAIL`/`PGADMIN_DEFAULT_PASSWORD` из
-  Secret (`secretKeyRef`, поля `secrets.pgadmin*`) требуются лишь entrypoint'у, для входа не нужны.
+  `role=admin` через ingress forward-auth. `PGADMIN_DEFAULT_EMAIL`/`PGADMIN_DEFAULT_PASSWORD` заданы
+  плейн-env (в секрете их нет): email обязан быть валидным, иначе entrypoint падает, пароль - заглушка.
 - **Префикс задаёт ingress, не env**: pgAdmin узнаёт о субпути `/pgadmin` из заголовка `X-Script-Name`,
   который проставляет ingress, а не из `SCRIPT_NAME`-env. Иначе при `rewrite-target` префикс
   навесился бы дважды. `PROXY_X_*=1` велит доверять `X-Forwarded-*`/`X-Script-Name` ровно от одного
@@ -179,53 +174,58 @@ spec:
 
 ## dbadmin-ingress.yaml - гейт-Ingress админ-панелей
 
-Под `{{- if and .Values.dbadmin.enabled .Values.ingress.enabled -}}`. Рендерит **два** Ingress
-(второй - под `dbadmin.qdrant`) на том же host, что приложение, и навешивает на оба external-auth
-ingress-nginx. Тот же host обязателен: forward-auth опирается на refresh-cookie `path=/`
-приложения, которая прикладывается только в пределах своего домена.
+Под `{{- if and .Values.dbadmin.enabled .Values.ingress.enabled -}}`. Ставит панель на тот же host,
+что приложение, за гейтом forward-auth. Тот же host обязателен: forward-auth опирается на
+refresh-cookie `path=/` приложения, а она host-only и до субдомена/другого хоста не доходит. Шаблон
+ветвится по `ingress.className`: **traefik** (overlay k3s, основной путь) и **nginx**.
+
+**Traefik** - цепочка из трёх `Middleware` на путь `/pgadmin`:
 
 ```yaml
-annotations:
-  nginx.ingress.kubernetes.io/auth-url: "http://<full>-backend.<ns>.svc.cluster.local:<port>/auth/forward-auth"
-  nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-User,X-Auth-Role"
-  nginx.ingress.kubernetes.io/auth-signin: "https://<host>/"
-  nginx.ingress.kubernetes.io/rewrite-target: /$2
-  # только у pgAdmin-Ingress:
-  nginx.ingress.kubernetes.io/configuration-snippet: |
-    proxy_set_header X-Script-Name /pgadmin;
+forwardAuth:                       # гейт role=admin
+  address: http://<full>-backend:<port>/auth/forward-auth
+  authResponseHeaders: [X-Auth-User, X-Auth-Role]
+---
+headers: { customRequestHeaders: { X-Script-Name: /pgadmin } }   # pgAdmin строит ссылки с префиксом
+---
+stripPrefix: { prefixes: [/pgadmin] }                            # снять /pgadmin перед проксированием
 ```
 
-- **external-auth → forward-auth**: перед каждым запросом ingress-nginx бьёт в
-  `auth-url` (`/auth/forward-auth` backend'а). Эндпоинт - единственный гейт: пускает только при
-  `role=admin` в БД (как доступ к Grafana), иначе `auth-signin` редиректит на `https://<host>/`
-  залогиниться. Заголовки `X-Auth-User`/`X-Auth-Role` из ответа проксируются дальше в панель.
-- **pgAdmin-Ingress**: путь `/pgadmin(/|$)(.*)`, `rewrite-target: /$2` срезает префикс перед
-  проксированием, а `configuration-snippet` отдаёт pgAdmin его субпуть заголовком `X-Script-Name`
-  (см. [pgadmin.yaml](#pgadminyaml---админ-панель-postgres-за-forward-auth)). Это два разных Ingress
-  именно из-за snippet'а - его нельзя навешивать на путь Qdrant.
-- **Qdrant-Ingress** (под `dbadmin.qdrant`): путь `/qdrant(/|$)(.*)` → Service `<full>-qdrant:6333`
-  за тем же гейтом, без snippet'а. **Caveat**: UI Qdrant ходит в API по корне-относительным путям
-  (`/collections`, `/cluster`), поэтому под субпутём `/qdrant` часть запросов может не разрешиться -
-  проверять на живом кластере; надёжнее отдать дашборд отдельным host (`qdrant.<домен>`) в корне.
-- **traefik (overlay k3s)**: аннотаций external-auth у traefik нет, тот же гейт собирается через
-  `Middleware` типа `forwardAuth` (на тот же `/auth/forward-auth`), навешиваемый на роут панели.
+Ingress навешивает их аннотацией в порядке `forwardAuth → headers → stripPrefix`:
+`traefik.ingress.kubernetes.io/router.middlewares: "<ns>-<full>-forward-auth@kubernetescrd,<ns>-<full>-pgadmin-headers@kubernetescrd,<ns>-<full>-pgadmin-strip@kubernetescrd"`.
+`forwardAuth` пускает только при `role=admin` в БД (как доступ к Grafana), иначе `401`; `stripPrefix`
+заменяет `rewrite-target` из nginx, а `X-Script-Name` возвращает pgAdmin его субпуть.
 
-## migrate-job.yaml - миграции схемы хуком
+**nginx** (ветка `else`) - тот же гейт через external-auth: `auth-url` → `/auth/forward-auth`,
+`auth-signin` редиректит не-admin на `https://<host>/`, `rewrite-target: /$2` срезает префикс,
+`configuration-snippet` ставит `X-Script-Name /pgadmin`.
 
-Job без условий, оформленный как Helm-хук **перед** install/upgrade. Прогоняет `alembic upgrade head`
-на primary (`-pg-rw`) до того, как стартуют поды сервисов, - чтобы backend не поднялся на устаревшей
-схеме:
+- **Qdrant-дашборд** (под `dbadmin.qdrant`, по умолчанию выключен): путь `/qdrant` → Service
+  `<full>-qdrant:6333` за тем же гейтом. **Caveat**: UI Qdrant ходит в API по корне-относительным
+  путям (`/collections`, `/cluster`), поэтому под субпутём часть запросов уходит мимо, а на субдомен
+  не дойдёт кука. Для живого кластера - port-forward к `:6333/dashboard` либо отдельный host с
+  собственной авторизацией (basicAuth).
+
+## migrate-job.yaml - миграции схемы Argo Sync-хуком
+
+Job прогоняет `alembic upgrade head` на primary (`-pg-rw`). Оформлен как **Argo Sync-хук**, а не
+Helm `pre-install`: pre-install шёл бы до создания CNPG `Cluster` в основном синке, падал на
+отсутствии БД и блокировал весь синк (дедлок). Sync-хук же исполняется внутри синка с учётом
+sync-wave, а готовность БД обеспечивает initContainer:
 
 ```yaml
 annotations:
-  "helm.sh/hook": pre-install,pre-upgrade
-  "helm.sh/hook-weight": "5"
-  "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  argocd.argoproj.io/hook: Sync
+  argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  argocd.argoproj.io/sync-wave: "-1"          # после Cluster (wave -2), до app-подов (0)
 spec:
-  backoffLimit: 3
+  backoffLimit: 6
   template:
     spec:
       restartPolicy: Never
+      initContainers:
+        - name: wait-postgres                  # крутится, пока -pg-rw не примет соединение
+          command: ["sh", "-c", "until python -c '...create_connection((\"<full>-pg-rw\",5432))'; do sleep 3; done"]
       containers:
         - name: migrate
           image: {{ include "codelens.image" (dict "root" . "name" "backend") }}
@@ -234,12 +234,15 @@ spec:
             - secretRef: { name: {{ include "codelens.secretName" . }} }
 ```
 
-- `hook-weight: "5"` - порядок среди pre-хуков (меньше = раньше); запас оставлен под возможные хуки до миграции.
-- `hook-delete-policy: before-hook-creation,hook-succeeded` - старый Job удаляется перед созданием
-  нового (иначе immutable-конфликт по имени) и убирается после успеха, не засоряя namespace; при
-  падении Job остаётся для разбора логов.
-- Образ - тот же `backend` (в нём alembic и модели). DSN берётся из Secret через `envFrom`; ConfigMap
-  миграции не монтируют. `restartPolicy: Never` + `backoffLimit: 3` - до трёх попыток пода.
+- **sync-wave**: CNPG `Cluster` и его секрет помечены `sync-wave: "-2"` ([data.md](./data.md)),
+  миграция - `"-1"`, остальные ресурсы - дефолтный `0`. Argo прогоняет волны по порядку: БД → миграция
+  → поды сервисов.
+- **initContainer `wait-postgres`** ждёт, пока сервис `-pg-rw` начнёт принимать соединения, - не
+  завязываясь на то, умеет ли Argo health-check CNPG. Поэтому миграция не падает, даже если волна
+  стартовала раньше готовности primary.
+- **hook-delete-policy: BeforeHookCreation** - старый Job удаляется перед пересозданием (Job immutable).
+  Образ - тот же `backend` (в нём alembic и модели), DSN из Secret через `envFrom`. `backoffLimit: 6` -
+  запас попыток на время подъёма CNPG.
 
 ## index-job.yaml - опциональная индексация корпуса
 

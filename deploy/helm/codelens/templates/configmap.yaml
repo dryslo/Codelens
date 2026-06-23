@@ -48,7 +48,17 @@ data:
       jwt_alg: HS256
       access_ttl: {{ .Values.config.auth.access_ttl | int64 }}
       refresh_ttl: {{ .Values.config.auth.refresh_ttl | int64 }}
-      oidc: {}
+      oidc:
+        {{- if .Values.config.oidc.google.clientId }}
+        # Google OIDC. clientId/login_uri читает фронт (кнопка Sign-In); audience/jwks_url/issuer -
+        # бэкенд при верификации id_token. login_uri = ingress.host/auth/oidc/google/callback.
+        google:
+          clientId: {{ .Values.config.oidc.google.clientId | quote }}
+          audience: {{ .Values.config.oidc.google.clientId | quote }}
+          jwks_url: https://www.googleapis.com/oauth2/v3/certs
+          issuer: https://accounts.google.com
+          login_uri: {{ printf "https://%s/auth/oidc/google/callback" .Values.ingress.host | quote }}
+        {{- end }}
     llm:
       kind: {{ .Values.config.llm.kind }}
       llm_url: http://{{ $full }}-llm:{{ .Values.llm.port }}

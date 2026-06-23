@@ -118,6 +118,29 @@ def _clear_session(ctx: Ctx) -> None:
         ctx.backend.token = None
 
 
+def _google_signin(ctx: Ctx) -> None:
+    """Кнопка «Войти через Google» (GIS, ux_mode=redirect). Видна, если задан clientId.
+
+    Google постит credential на backend login_uri (/auth/oidc/google/callback); тот верифицирует
+    id_token, ставит refresh-куку и редиректит на /. <base target="_top"> уводит сабмит формы из
+    component-iframe в верхнее окно, иначе callback открылся бы внутри фрейма. Сессию фронт
+    подхватывает по куке (как при F5).
+    """
+    g = ((ctx.cfg.get("auth") or {}).get("oidc") or {}).get("google") or {}
+    cid, uri = g.get("clientId"), g.get("login_uri")
+    if not cid or not uri:
+        return
+    import streamlit.components.v1 as components
+    st.divider()
+    components.html(
+        f'<base target="_top">'
+        f'<script src="https://accounts.google.com/gsi/client" async></script>'
+        f'<div id="g_id_onload" data-client_id="{cid}" data-login_uri="{uri}" data-ux_mode="redirect"></div>'
+        f'<div class="g_id_signin" data-type="standard" data-text="signin_with" data-shape="pill"></div>',
+        height=80,
+    )
+
+
 def _login_screen(ctx: Ctx) -> None:
     st.title("CodeLens - вход")
     lt, rt = st.tabs(["Вход", "Регистрация"])
@@ -131,6 +154,7 @@ def _login_screen(ctx: Ctx) -> None:
                 st.rerun()
             else:
                 st.error(res.get("error", "Неверный логин или пароль"))
+        _google_signin(ctx)
     with rt:
         rl = st.text_input("Логин", key="rg_login")
         rp = st.text_input("Пароль", type="password", key="rg_pw")
