@@ -17,6 +17,7 @@ spec:
       valueFiles:
         - values.yaml
         - values-prod.yaml
+        - values-k3s.yaml      # ingress traefik, раскладка по узлам, qdrant/pg HA, трим под 6 ГБ data-узлы
   destination:
     server: https://kubernetes.default.svc
     namespace: codelens-prod
