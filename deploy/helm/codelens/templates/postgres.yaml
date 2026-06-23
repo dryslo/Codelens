@@ -7,6 +7,8 @@ metadata:
   name: {{ $full }}-pg-app
   labels:
     {{- include "codelens.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"   # БД и её креды - раньше миграции (wave -1) и app-подов (0)
 type: kubernetes.io/basic-auth
 stringData:
   username: {{ .Values.postgres.user | quote }}
@@ -20,6 +22,8 @@ metadata:
   name: {{ $full }}-pg
   labels:
     {{- include "codelens.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"   # создаётся первым; migrate (wave -1) ждёт его готовности
 spec:
   instances: {{ .Values.postgres.instances }}
   {{- if .Values.postgres.imageName }}
