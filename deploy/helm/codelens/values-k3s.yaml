@@ -18,12 +18,36 @@ config:
     replicas: 2        # фактор репликации коллекции: каждый шард в 2 копиях на разных узлах
 qdrant:
   replicas: 3          # = числу data-узлов
+  storage: 25Gi        # data-узел 80 ГБ: 25(qdrant)+10(pg) + ОС/образы влезает; корпус кода небольшой
   nodeSelector: { codelens.io/pool: data }
 postgres:
   instances: 3         # primary + 2 hot-standby; CNPG разносит по узлам и делает failover
+  storage: 10Gi
   nodeSelector: { codelens.io/pool: data }
 redis:
   enabled: true        # одиночный (кэш + очередь RQ); не реплицируется - допустимо
+  nodeSelector: { codelens.io/pool: data }   # держим на data-узлах, прочь от node-dev (staging)
+
+# --- Масштаб под 6 ГБ data-узлы (vs 16 ГБ в эталонной топологии) ---
+# На каждом data-узле живут qdrant + postgres + доля stateless. После ОС+k3s-server(etcd) свободно
+# ~4.5 ГБ, поэтому stateless урезан по памяти и HPA, чтобы всплеск реплик не выбивал БД по OOM.
+backend:
+  resources:
+    requests: { cpu: "250m", memory: 256Mi }
+    limits:   { cpu: "1",    memory: 1Gi }
+  hpa: { maxReplicas: 3 }
+  nodeSelector: { codelens.io/pool: data }
+frontend:
+  resources:
+    requests: { cpu: "100m", memory: 128Mi }
+    limits:   { cpu: "500m", memory: 384Mi }
+  hpa: { maxReplicas: 2 }
+  nodeSelector: { codelens.io/pool: data }
+worker:
+  resources:
+    requests: { cpu: "250m", memory: 256Mi }
+    limits:   { cpu: "1",    memory: 1Gi }
+  nodeSelector: { codelens.io/pool: data }
 
 # --- Раскладка тяжёлых/особых подов по выделенным узлам ---
 
@@ -34,6 +58,9 @@ redis:
 embedder:
   replicas: 1                 # один heavy-узел -> одна реплика (2 пода = двойная загрузка модели -> OOM)
   hpa: { enabled: false }     # масштабировать некуда, пока heavy-узел один; при добавлении узлов - включить
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits:   { cpu: "4", memory: 5Gi }   # heavy-узел 8 ГБ: лимит 5Gi оставляет запас ОС/k3s
   nodeSelector:
     codelens.io/pool: heavy
   tolerations:
@@ -46,6 +73,9 @@ embedder:
 llm:
   replicas: 1                 # один EU-узел -> одна реплика
   hpa: { enabled: false }     # gateway лёгкий (вся генерация на стороне Groq/Gemini)
+  resources:
+    requests: { cpu: "100m", memory: 128Mi }
+    limits:   { cpu: "500m", memory: 384Mi }   # KZ-узел 2 ГБ: gateway без модели, рядом со staging-llm
   nodeSelector:
     geo: eu
   tolerations:

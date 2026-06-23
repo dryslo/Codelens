@@ -143,6 +143,7 @@ worker:
     requests: { cpu: "500m", memory: 512Mi }
     limits:   { cpu: "2",    memory: 2Gi }
   nodeSelector: {}
+  tolerations: []           # для выноса на выделенный узел (напр. весь staging на одном node-dev)
 
 # --- Stateful ---
 qdrant:
@@ -172,6 +173,8 @@ redis:
   image: redis:7
   storage: 5Gi
   storageClass: ""
+  nodeSelector: {}
+  tolerations: []           # как worker: для прибивки к выделенному узлу окружения
 
 ingress:
   enabled: true

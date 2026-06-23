@@ -2,6 +2,14 @@
 # (helm.valueFiles: [values.yaml, values-staging.yaml]).
 #
 # image.tag правит CI (job bump-tag) после сборки образов, вручную не редактируется.
+#
+# Раскладка: весь staging-стек сидит на одном выделенном узле node-dev (второй мощный сервер,
+# 8 ГБ), а llm - на том же KZ-узле, что и prod-llm (только оттуда доступны внешние Groq/Gemini).
+# Так prod-овские data-узлы (6 ГБ) не задеваются. Узел размечается:
+#   kubectl label node node-dev codelens.io/env=staging
+#   kubectl taint node node-dev dedicated=staging:NoSchedule    # чужие поды сюда нельзя
+# nodeSelector притягивает staging-поды на node-dev, toleration снимает действие taint'а.
+# staging НЕ подключает values-k3s.yaml, поэтому ingress/раскладку задаём прямо здесь.
 fullnameOverride: codelens     # стабильные имена ресурсов (codelens-*, codelens-pg-rw) вне зависимости
                                # от имени Argo Application
 
@@ -15,16 +23,65 @@ config:
     replicas: 1
 
 ingress:
+  className: traefik           # тот же k3s, что и prod (по умолчанию traefik); база ставит nginx
   host: staging.codelens.local
 
-# Урезанный масштаб для staging-кластера.
-frontend: { replicas: 1, hpa: { enabled: false } }
-backend:  { replicas: 1, hpa: { enabled: false } }
-embedder: { replicas: 1, hpa: { enabled: false } }
-llm:      { replicas: 1, hpa: { enabled: false } }
-qdrant:   { replicas: 1 }
-postgres: { instances: 1 }
-worker:   { replicas: 1 }
+# Урезанный масштаб (всё в одну реплику) + прибивка к node-dev. embedder с лимитом 4Gi:
+# e5-large + qdrant/pg/stateless должны уместиться в 8 ГБ узла.
+frontend:
+  replicas: 1
+  hpa: { enabled: false }
+  nodeSelector: { codelens.io/env: staging }
+  tolerations:
+    - { key: dedicated, operator: Equal, value: staging, effect: NoSchedule }
+backend:
+  replicas: 1
+  hpa: { enabled: false }
+  nodeSelector: { codelens.io/env: staging }
+  tolerations:
+    - { key: dedicated, operator: Equal, value: staging, effect: NoSchedule }
+embedder:
+  replicas: 1
+  hpa: { enabled: false }
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits:   { cpu: "2", memory: 4Gi }
+  nodeSelector: { codelens.io/env: staging }
+  tolerations:
+    - { key: dedicated, operator: Equal, value: staging, effect: NoSchedule }
+worker:
+  replicas: 1
+  nodeSelector: { codelens.io/env: staging }
+  tolerations:
+    - { key: dedicated, operator: Equal, value: staging, effect: NoSchedule }
+qdrant:
+  replicas: 1
+  storage: 25Gi
+  nodeSelector: { codelens.io/env: staging }
+  tolerations:
+    - { key: dedicated, operator: Equal, value: staging, effect: NoSchedule }
+postgres:
+  instances: 1
+  storage: 10Gi
+  nodeSelector: { codelens.io/env: staging }
+  tolerations:
+    - { key: dedicated, operator: Equal, value: staging, effect: NoSchedule }
+redis:
+  nodeSelector: { codelens.io/env: staging }
+  tolerations:
+    - { key: dedicated, operator: Equal, value: staging, effect: NoSchedule }
+
+# llm -> единственный внешне-доступный узел (KZ), рядом с prod-llm. Свой Service в ns staging,
+# config.yaml резолвит его внутри namespace; под физически едет на geo=eu по nodeSelector.
+llm:
+  replicas: 1
+  hpa: { enabled: false }
+  resources:
+    requests: { cpu: "100m", memory: 128Mi }
+    limits:   { cpu: "500m", memory: 384Mi }
+  nodeSelector: { geo: eu }
+  tolerations:
+    - { key: dedicated, operator: Equal, value: llm, effect: NoSchedule }
 
 # Секрет codelens-secrets чарт не создаёт - его в namespace codelens-staging кладёт контроллер
 # sealed-secrets из зашифрованного deploy/gitops/sealed/staging/codelens-secrets.yaml (он в git).

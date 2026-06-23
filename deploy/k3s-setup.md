@@ -3,15 +3,28 @@
 Цель: рабочая репликация и шардирование (Qdrant-кластер и CNPG-Postgres) плюс выделенные узлы под
 embedder и llm.
 
-## Топология (рекомендуемая, 5 узлов)
+## Топология (6 узлов: prod + staging на одном кластере)
 
 | Узел | k3s-роль | Назначение | vCPU/RAM/диск | Где | Метки / taint'ы |
 |------|----------|-----------|---------------|-----|-----------------|
-| `node-s1` | **server** (`--cluster-init`) | data-тир + control-plane | 4 / 16 ГБ / 150+ ГБ SSD | РФ | `codelens.io/pool=data` |
-| `node-s2` | **server** | data-тир + control-plane | 4 / 16 ГБ / 150+ ГБ SSD | РФ | `codelens.io/pool=data` |
-| `node-s3` | **server** | data-тир + control-plane | 4 / 16 ГБ / 150+ ГБ SSD | РФ | `codelens.io/pool=data` |
-| `node-heavy` | agent | embedder (e5-large на CPU) | 8 / 16 ГБ / 40 ГБ | РФ | `codelens.io/pool=heavy`, taint `dedicated=embedder:PreferNoSchedule` |
-| `node-eu` | agent | llm-gateway (внешние API) | 2 / 4 ГБ / 40 ГБ | **EU** | `geo=eu`, taint `dedicated=llm:NoSchedule` |
+| `node-s1` | **server** (`--cluster-init`) | prod data-тир + control-plane | 4 / 6 ГБ / 80 ГБ | РФ | `codelens.io/pool=data` |
+| `node-s2` | **server** | prod data-тир + control-plane | 4 / 6 ГБ / 80 ГБ | РФ | `codelens.io/pool=data` |
+| `node-s3` | **server** | prod data-тир + control-plane | 4 / 6 ГБ / 80 ГБ | РФ | `codelens.io/pool=data` |
+| `node-heavy` | agent | prod embedder (e5-large на CPU) | 4 / 8 ГБ / 90 ГБ | РФ | `codelens.io/pool=heavy`, taint `dedicated=embedder:PreferNoSchedule` |
+| `node-dev` | agent | **весь staging-стек** (своё окружение) | 4 / 8 ГБ / 90 ГБ | РФ | `codelens.io/env=staging`, taint `dedicated=staging:NoSchedule` |
+| `node-eu` | agent | llm-gateway (внешние API; prod + staging) | 2 / 2 ГБ / 30 ГБ | **EU/KZ** | `geo=eu`, taint `dedicated=llm:NoSchedule` |
+
+Числа RAM/диска отражают демо-парк (под нагрузку не масштабируется): `values-k3s.yaml` урезает
+память stateless и потолки HPA под 6 ГБ data-узлы и ставит лимит embedder 5Gi под 8 ГБ heavy-узел;
+диски qdrant/postgres - 25Gi/10Gi под 80 ГБ. Для боевой нагрузки узлы берутся крупнее, а трим
+убирается.
+
+**prod и staging - одно окружение каждый, но один кластер.** prod (namespace `codelens-prod`,
+ветка main) размазан по 3 data + heavy + EU. staging (namespace `codelens-staging`, ветка dev)
+целиком сидит на `node-dev`: свой embedder, qdrant-1, postgres-1, redis, worker, stateless. Общий
+у них только EU-узел: оба llm-пода (по сервису на namespace) едут на `geo=eu`, т.к. только оттуда
+доступны Groq/Gemini. taint `dedicated=staging:NoSchedule` держит prod-поды прочь от `node-dev`,
+а `nodeSelector pool=data` у prod-stateless - прочь от staging-узла.
 
 **Почему 3 server-узла, а не 1 control-plane + 3 data.** Один control-plane - единая точка отказа
 управления кластером. Поскольку data-узлов всё равно три, они же выступают k3s-серверами с embedded
@@ -60,12 +73,12 @@ curl -sfL https://get.k3s.io | sh -s - server \
   --flannel-backend=wireguard-native \
   --node-external-ip=<PUB_IP_этого_узла> --tls-san=<PUB_IP_этого_узла>
 ```
-**агенты (node-heavy, node-eu):**
+**агенты (node-heavy, node-dev, node-eu):**
 ```bash
 curl -sfL https://get.k3s.io | K3S_URL=https://<PUB_IP_s1>:6443 K3S_TOKEN=<ТОКЕН> \
   sh -s - agent --node-external-ip=<PUB_IP_этого_узла>
 ```
-Проверка: `kubectl get nodes -o wide` - 3 server + 2 agent в `Ready`.
+Проверка: `kubectl get nodes -o wide` - 3 server + 3 agent в `Ready`.
 
 > kubeconfig: `/etc/rancher/k3s/k3s.yaml` (`127.0.0.1` заменяется на `<PUB_IP_s1>` для внешнего kubectl/Argo).
 
@@ -75,6 +88,9 @@ for n in node-s1 node-s2 node-s3; do kubectl label node $n codelens.io/pool=data
 
 kubectl label node node-heavy codelens.io/pool=heavy
 kubectl taint node node-heavy dedicated=embedder:PreferNoSchedule   # мягко: чужие избегают, но могут заехать
+
+kubectl label node node-dev codelens.io/env=staging
+kubectl taint node node-dev dedicated=staging:NoSchedule           # жёстко: prod-поды на staging-узел нельзя
 
 kubectl label node node-eu geo=eu
 kubectl taint node node-eu dedicated=llm:NoSchedule                 # жёстко: РФ-поды сюда нельзя
