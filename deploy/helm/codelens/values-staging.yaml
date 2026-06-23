@@ -13,7 +13,7 @@
 fullnameOverride: codelens # стабильные имена ресурсов (codelens-*, codelens-pg-rw) вне зависимости
 # от имени Argo Application
 image:
-  tag: db8e9b00ad8192b90ce1f9ad69b2d10d5fadc7d0 # перезаписывается CI на git-SHA
+  tag: 077934cc91aa49f1d4f695bac8226e51c7dbb6a8 # перезаписывается CI на git-SHA
 # Одна нода Qdrant на staging -> фактор репликации/шарды коллекции тоже 1 (иначе не разместятся).
 config:
   vector:
