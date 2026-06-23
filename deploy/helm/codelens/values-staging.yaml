@@ -13,7 +13,7 @@
 fullnameOverride: codelens # стабильные имена ресурсов (codelens-*, codelens-pg-rw) вне зависимости
 # от имени Argo Application
 image:
-  tag: 077934cc91aa49f1d4f695bac8226e51c7dbb6a8 # перезаписывается CI на git-SHA
+  tag: b26a738d9598d1f642399ea36fe924f19079392c # перезаписывается CI на git-SHA
 # Одна нода Qdrant на staging -> фактор репликации/шарды коллекции тоже 1 (иначе не разместятся).
 config:
   vector:
@@ -89,7 +89,6 @@ llm:
 # Генерация: deploy/gitops/sealed/seal.sh staging. Подробно - deploy/gitops/sealed/README.md.
 secrets:
   create: false
-
 # БД-панель pgAdmin за forward-auth (role=admin) на staging.codelens.fun/pgadmin.
 # qdrant=false: дашборд Qdrant под субпутём ломается (см. dbadmin-ingress), для демо не нужен.
 # Своего логина у pgAdmin нет (desktop-режим), единственный гейт - forward-auth; секрет не нужен.
@@ -99,7 +98,6 @@ dbadmin:
   nodeSelector: {codelens.io/env: staging}
   tolerations:
     - {key: dedicated, operator: Equal, value: staging, effect: NoSchedule}
-
 # Наблюдаемость: рендерит ServiceMonitor (скрейп /metrics backend) + ConfigMap-дашборд Grafana.
 # Их подхватывает kube-prometheus-stack (application-monitoring.yaml). serviceMonitor.labels пустые -
 # стек настроен на serviceMonitorSelectorNilUsesHelmValues=false (берёт все ServiceMonitor).
