@@ -125,21 +125,22 @@ kubectl taint node node-eu dedicated=llm:NoSchedule                 # жёстк
 # CloudNativePG (postgres)
 kubectl apply --server-side -f \
   https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.24/releases/cnpg-1.24.0.yaml
-# sealed-secrets controller (см. deploy/gitops/sealed/README.md)
-helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
-helm install sealed-secrets sealed-secrets/sealed-secrets \
-  -n kube-system --set fullnameOverride=sealed-secrets-controller
+# sealed-secrets controller (см. deploy/gitops/sealed/README.md) - манифестом из релизов,
+# создаёт Deployment sealed-secrets-controller в kube-system (имя по умолчанию для kubeseal)
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
 # cert-manager + ClusterIssuer (TLS на codelens.fun; issuer letsencrypt-prod = аннотация в values)
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook   # дождаться webhook перед issuer
 kubectl apply -f deploy/gitops/cluster-issuer.yaml
-# Argo CD
+# Argo CD (server-side: CRD applicationsets крупный, client-side apply упрётся в лимит аннотации 256КБ)
 kubectl create ns argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl apply --server-side --force-conflicts -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 ```
 
-DNS-записи `codelens.fun` и `staging.codelens.fun` (A -> публичный IP `node-s1`) должны резолвиться
-до применения issuer, иначе ACME HTTP-01 не подтвердит домен (cert-manager будет ретраить).
+DNS-записи `codelens.fun` и `staging.codelens.fun` (по 3 A-записи на публичные IP data-узлов
+s1/s2/s3, TTL 60s - без single-IP SPOF) должны резолвиться до применения issuer, иначе ACME
+HTTP-01 не подтвердит домен (cert-manager будет ретраить).
 
 ## 5. Секреты (sealed-secrets)
 ```bash
