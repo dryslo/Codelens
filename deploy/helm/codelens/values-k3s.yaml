@@ -75,7 +75,7 @@ llm:
   hpa: { enabled: false }     # gateway лёгкий (вся генерация на стороне Groq/Gemini)
   resources:
     requests: { cpu: "100m", memory: 128Mi }
-    limits:   { cpu: "500m", memory: 384Mi }   # KZ-узел 2 ГБ: gateway без модели, рядом со staging-llm
+    limits:   { cpu: "500m", memory: 384Mi }   # gateway без модели; KZ-узел 6 ГБ, запас большой
   nodeSelector:
     geo: eu
   tolerations:

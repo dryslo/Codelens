@@ -6,7 +6,8 @@ image:
   tag: latest                  # перезаписывается CI на git-SHA
 
 ingress:
-  host: codelens.example.com
+  host: codelens.fun
+  tls: true                                            # HTTPS обязателен: refresh-cookie с secure-флагом
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod   # TLS через cert-manager (если установлен)
 

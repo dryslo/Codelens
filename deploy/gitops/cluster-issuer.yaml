@@ -1,0 +1,19 @@
+# ClusterIssuer Let's Encrypt (prod ACME) для TLS на codelens.fun / staging.codelens.fun.
+# Имя letsencrypt-prod совпадает с аннотацией cert-manager.io/cluster-issuer в values-prod/staging.
+# Применяется один раз при bootstrap (см. deploy/k3s-setup.md, п.4). Требует установленного cert-manager.
+# HTTP-01 challenge приходит на 80/443 узла, куда смотрит DNS - порт должен быть публично доступен,
+# а записи codelens.fun/staging.codelens.fun - резолвиться до выпуска.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: debil12724@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account
+    solvers:
+      - http01:
+          ingress:
+            class: traefik

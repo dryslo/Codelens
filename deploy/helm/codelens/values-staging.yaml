@@ -24,7 +24,10 @@ config:
 
 ingress:
   className: traefik           # тот же k3s, что и prod (по умолчанию traefik); база ставит nginx
-  host: staging.codelens.local
+  host: staging.codelens.fun
+  tls: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod   # тот же issuer, что и prod
 
 # Урезанный масштаб (всё в одну реплику) + прибивка к node-dev. embedder с лимитом 4Gi:
 # e5-large + qdrant/pg/stateless должны уместиться в 8 ГБ узла.

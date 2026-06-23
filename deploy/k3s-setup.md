@@ -12,7 +12,7 @@ embedder и llm.
 | `node-s3` | **server** | prod data-тир + control-plane | 4 / 6 ГБ / 80 ГБ | РФ | `codelens.io/pool=data` |
 | `node-heavy` | agent | prod embedder (e5-large на CPU) | 4 / 8 ГБ / 90 ГБ | РФ | `codelens.io/pool=heavy`, taint `dedicated=embedder:PreferNoSchedule` |
 | `node-dev` | agent | **весь staging-стек** (своё окружение) | 4 / 8 ГБ / 90 ГБ | РФ | `codelens.io/env=staging`, taint `dedicated=staging:NoSchedule` |
-| `node-eu` | agent | llm-gateway (внешние API; prod + staging) | 2 / 2 ГБ / 30 ГБ | **EU/KZ** | `geo=eu`, taint `dedicated=llm:NoSchedule` |
+| `node-eu` | agent | llm-gateway (внешние API; prod + staging) | 4 / 6 ГБ / 80 ГБ | **KZ** | `geo=eu`, taint `dedicated=llm:NoSchedule` |
 
 Числа RAM/диска отражают демо-парк (под нагрузку не масштабируется): `values-k3s.yaml` урезает
 память stateless и потолки HPA под 6 ГБ data-узлы и ставит лимит embedder 5Gi под 8 ГБ heavy-узел;
@@ -47,40 +47,63 @@ SPOF-узла. На них же работают qdrant/postgres/redis и лёг
 
 ---
 
-## 1. Firewall - открыть между узлами кластера
-- `6443/tcp` - Kubernetes API
-- `2379-2380/tcp` - embedded etcd (между server-узлами)
-- `51820/udp` - wireguard (flannel-backend, см. п.2); либо `8472/udp` для обычного VXLAN
-- `10250/tcp` - kubelet
+## 1. Сеть кластера и firewall
 
-Наружу публично - только ingress (`80/443`) на узле, куда смотрит DNS.
+Сеть строится до k3s: 5 РФ-узлов - в приватной сети провайдера, `node-eu` (KZ) - через границу по
+AmneziaWG (обфускация против DPI). Полный разбор и генератор конфигов - [`amnezia/README.md`](amnezia/README.md).
+Подними его сначала; дальше k3s едет поверх.
 
-## 2. Установить k3s (HA, шифрованная сеть РФ-EU)
-Узлы общаются по публичному интернету -> flannel поверх wireguard. Traefik сохраняется (overlay настроен
-на `className: traefik`; для nginx добавляется `--disable traefik` и ставится ingress-nginx).
+Firewall:
+- между публичными IP (KZ ↔ каждый РФ-узел): `51820/udp` (AmneziaWG);
+- в приватной сети (РФ↔РФ): `6443/tcp`, `2379-2380/tcp` (server-узлы), `8472/udp` (vxlan), `10250/tcp`;
+- наружу публично: `80/443` только на data-узлах, куда смотрит DNS.
+
+Служебные порты k3s наружу не открываются: РФ↔РФ они в приватной сети, KZ↔РФ - внутри awg-туннеля.
+
+## 2. Установить k3s (HA поверх гибридной сети)
+
+Кластерный трафик идёт по приватным IP (РФ, подсеть `10.16.0.0/24`, интерфейс `ens9`) и tunnel-IP
+`10.10.0.6` (KZ): задаём через `--node-ip`/`--flannel-iface`. Публичный IP остаётся только для
+ingress (`--node-external-ip`).
+
+| Узел | приватный/tunnel IP (`--node-ip`) | публичный IP (`--node-external-ip`) |
+|------|-----------------------------------|-------------------------------------|
+| node-s1 | 10.16.0.2 | 159.194.229.34 |
+| node-s2 | 10.16.0.3 | 159.194.235.78 |
+| node-s3 | 10.16.0.4 | 31.207.76.197 |
+| node-heavy | 10.16.0.5 | 85.198.66.196 |
+| node-dev | 10.16.0.1 | 85.198.68.29 |
+| node-eu | 10.10.0.6 (awg0) | 178.236.17.61 |
 
 **server #1 (node-s1):**
 ```bash
-curl -sfL https://get.k3s.io | sh -s - server --cluster-init \
-  --flannel-backend=wireguard-native \
-  --node-external-ip=<PUB_IP_s1> --tls-san=<PUB_IP_s1>
+curl -sfL https://get.k3s.io | sh -s - server --cluster-init --node-name node-s1 \
+  --node-ip 10.16.0.2 --flannel-iface ens9 \
+  --node-external-ip 159.194.229.34 --tls-san 159.194.229.34 --tls-san 10.16.0.2
 sudo cat /var/lib/rancher/k3s/server/node-token        # токен для остальных
 ```
-**server #2 и #3 (node-s2, node-s3):**
-```bash
-curl -sfL https://get.k3s.io | sh -s - server \
-  --server https://<PUB_IP_s1>:6443 --token <ТОКЕН> \
-  --flannel-backend=wireguard-native \
-  --node-external-ip=<PUB_IP_этого_узла> --tls-san=<PUB_IP_этого_узла>
-```
-**агенты (node-heavy, node-dev, node-eu):**
-```bash
-curl -sfL https://get.k3s.io | K3S_URL=https://<PUB_IP_s1>:6443 K3S_TOKEN=<ТОКЕН> \
-  sh -s - agent --node-external-ip=<PUB_IP_этого_узла>
-```
-Проверка: `kubectl get nodes -o wide` - 3 server + 3 agent в `Ready`.
+**server #2 (node-s2) и #3 (node-s3):** то же, добавив `--server https://10.16.0.2:6443 --token <ТОКЕН>`
+и свои `--node-name`/`--node-ip`/`--node-external-ip`/`--tls-san` (например node-s2: `--node-ip 10.16.0.3`,
+`--node-external-ip 159.194.235.78`, `--tls-san 159.194.235.78 --tls-san 10.16.0.3`).
 
-> kubeconfig: `/etc/rancher/k3s/k3s.yaml` (`127.0.0.1` заменяется на `<PUB_IP_s1>` для внешнего kubectl/Argo).
+**агенты РФ (node-heavy, node-dev):**
+```bash
+# node-heavy:
+curl -sfL https://get.k3s.io | K3S_URL=https://10.16.0.2:6443 K3S_TOKEN=<ТОКЕН> \
+  sh -s - agent --node-name node-heavy --node-ip 10.16.0.5 --flannel-iface ens9 \
+  --node-external-ip 85.198.66.196
+# node-dev: --node-name node-dev --node-ip 10.16.0.1 --node-external-ip 85.198.68.29
+```
+**агент KZ (node-eu) - по приватному IP s1 через awg-туннель, node-ip = tunnel-IP:**
+```bash
+curl -sfL https://get.k3s.io | K3S_URL=https://10.16.0.2:6443 K3S_TOKEN=<ТОКЕН> \
+  sh -s - agent --node-name node-eu --node-ip 10.10.0.6 --flannel-iface awg0 \
+  --node-external-ip 178.236.17.61
+```
+Проверка: `kubectl get nodes -o wide` - 3 server + 3 agent в `Ready`; INTERNAL-IP у РФ - `10.16.0.x`,
+у `node-eu` - `10.10.0.6`.
+
+> kubeconfig: `/etc/rancher/k3s/k3s.yaml` (`127.0.0.1` заменяется на публичный IP `node-s1` для внешнего kubectl/Argo).
 
 ## 3. Разметить узлы (метки + taint'ы)
 ```bash
@@ -106,10 +129,17 @@ kubectl apply --server-side -f \
 helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
 helm install sealed-secrets sealed-secrets/sealed-secrets \
   -n kube-system --set fullnameOverride=sealed-secrets-controller
+# cert-manager + ClusterIssuer (TLS на codelens.fun; issuer letsencrypt-prod = аннотация в values)
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+kubectl -n cert-manager rollout status deploy/cert-manager-webhook   # дождаться webhook перед issuer
+kubectl apply -f deploy/gitops/cluster-issuer.yaml
 # Argo CD
 kubectl create ns argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 ```
+
+DNS-записи `codelens.fun` и `staging.codelens.fun` (A -> публичный IP `node-s1`) должны резолвиться
+до применения issuer, иначе ACME HTTP-01 не подтвердит домен (cert-manager будет ретраить).
 
 ## 5. Секреты (sealed-secrets)
 ```bash

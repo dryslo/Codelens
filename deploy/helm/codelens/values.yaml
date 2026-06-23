@@ -182,6 +182,7 @@ ingress:
   host: codelens.local
   apiPath: true           # true -> /api/* проксируется на backend
   authPath: false         # true -> /auth/* идёт на backend (single-origin httpOnly refresh-cookie)
+  tls: false              # true -> spec.tls на ingress.host, секрет <full>-tls (заполняет cert-manager)
   annotations: {}
 
 # --- Администрирование БД (pgAdmin + дашборд Qdrant за forward-auth). По умолчанию выкл. ---
