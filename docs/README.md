@@ -77,7 +77,7 @@
 | Векторный стор | `VECTOR_KIND`, `CHROMA_PATH`, `QDRANT_URL` | `chroma` (`.chroma`) | `qdrant` (кластер) |
 | БД / кэш / очередь | `DATABASE_DSN`, `REDIS_URL`, `CACHE_TTL`, `JOBS_KIND` | SQLite, NullCache, `inprocess` | Postgres, Redis, `redis` (RQ) |
 | LLM | `LLM_KIND`, `LLM_URL`, `LLM_FAST`, ключи провайдеров | `local` (в процессе) | `remote` (llm-gateway) |
-| Авторизация | `AUTH_ENABLED`, `JWT_SECRET`, `ACCESS_TTL`, `REFRESH_TTL`, `AUTH_COOKIE_SECURE`, `ADMIN_LOGIN`/`ADMIN_PASSWORD` | `enabled`, дев-секрет, cookie insecure | прод-секрет, `cookie_secure=true` (HTTPS) |
+| Авторизация | `AUTH_ENABLED`, `JWT_SECRET`, `ACCESS_TTL`, `REFRESH_TTL`, `AUTH_COOKIE_SECURE`, `AUTH_COOKIE_PATH`, `ADMIN_LOGIN`/`ADMIN_PASSWORD` | `enabled`, дев-секрет, cookie insecure, path `/` | прод-секрет, `cookie_secure=true` (HTTPS) |
 | Ingest | `MAX_UPLOAD_MB` | 100 | как нужно |
 
 Подробности по слоям: профили и проводка - [architecture.md](architecture.md) и [factory.md](factory.md);

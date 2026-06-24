@@ -19,7 +19,7 @@ frontend = ["streamlit", "streamlit-cookies-controller", "requests"]
 # БЕЗ sentence-transformers/torch и chromadb - эмбеддер/реранкер удалённые, стор - qdrant (scale).
 backend = [
   "fastapi", "uvicorn[standard]", "python-multipart", "requests", "numpy",
-  "sqlalchemy>=2.0", "alembic", "bm25s", "argon2-cffi", "pyjwt", "rq",
+  "sqlalchemy>=2.0", "alembic", "bm25s", "argon2-cffi", "pyjwt[crypto]", "rq",
   "codelens[parsers]",   # мультиязычные парсеры - по умолчанию (индексация)
 ]
 

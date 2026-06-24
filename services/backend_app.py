@@ -31,6 +31,16 @@ app.state.cfg = COMP.cfg
 protected = APIRouter(dependencies=[Depends(require_user)])
 
 
+@protected.get("/index/stats")
+def index_stats() -> dict:
+    """Статистика индекса (чанки/источники/языки) - любому аутентифицированному (вкладка Поиск).
+
+    Отдельно от /admin/stats: Поиск виден всем ролям и берёт отсюда фильтры/признак пустоты индекса,
+    поэтому не должен требовать admin (иначе обычный юзер видит «Индекс пуст»).
+    """
+    return BACKEND.stats()
+
+
 @protected.post("/search")
 def search(r: SearchReq) -> dict:
     """Возвращает результаты retrieval по запросу с заданными флагами и фильтрами."""

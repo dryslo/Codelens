@@ -17,6 +17,17 @@ spec:
     targetRevision: 65.5.0             # актуальная версия чарта
     helm:
       values: |
+        # Алерты для демо не нужны - выключаем Alertmanager (экономия ресурсов на 6 ГБ data-узлах).
+        alertmanager:
+          enabled: false
+        # На k3s control-plane-компоненты штатно не скрейпятся, а их exporter-Service лезут в
+        # kube-system - вне песочницы project codelens (synchronization не разрешён). Выключаем:
+        # метрики приложения и узлов идут из ns monitoring (node-exporter + kube-state-metrics).
+        kubeControllerManager: { enabled: false }
+        kubeScheduler:         { enabled: false }
+        kubeProxy:             { enabled: false }
+        kubeEtcd:              { enabled: false }
+        coreDns:               { enabled: false }
         # Скрейпить все ServiceMonitor/PodMonitor в кластере, а не только с release-лейблом,
         # чтобы ServiceMonitor подхватывался без дополнительных лейблов (для демо/staging удобно;
         # на проде можно ужесточить и проставлять monitoring.serviceMonitor.labels вместо этого).
@@ -24,7 +35,7 @@ spec:
           prometheusSpec:
             serviceMonitorSelectorNilUsesHelmValues: false
             podMonitorSelectorNilUsesHelmValues: false
-            retention: 7d
+            retention: 3d
         grafana:
           defaultDashboardsTimezone: browser
           sidecar:
@@ -32,6 +43,44 @@ spec:
               enabled: true
               label: grafana_dashboard     # = monitoring.dashboards.label в чарте
               searchNamespace: ALL         # искать ConfigMap-дашборды во всех namespace
+          # Grafana под /grafana на staging.codelens.fun, за Traefik forward-auth (role=admin) -
+          # тем же гейтом, что Adminer. serve_from_sub_path: Grafana сама ждёт префикс /grafana
+          # (stripPrefix НЕ нужен). Внутри - анонимный admin: доступ уже отфильтрован forward-auth.
+          "grafana.ini":
+            server:
+              root_url: https://staging.codelens.fun/grafana
+              serve_from_sub_path: true
+            "auth.anonymous":
+              enabled: true
+              org_role: Admin
+            auth:
+              disable_login_form: true
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+              traefik.ingress.kubernetes.io/router.middlewares: monitoring-grafana-forward-auth@kubernetescrd
+            hosts:
+              - staging.codelens.fun
+            path: /grafana
+            pathType: Prefix
+            tls:
+              - secretName: grafana-tls
+                hosts:
+                  - staging.codelens.fun
+          # Traefik Middleware forwardAuth в ns monitoring -> backend в codelens-staging (кросс-ns вызов).
+          extraObjects:
+            - apiVersion: traefik.io/v1alpha1
+              kind: Middleware
+              metadata:
+                name: grafana-forward-auth
+              spec:
+                forwardAuth:
+                  address: http://codelens-backend.codelens-staging.svc.cluster.local:8080/auth/forward-auth
+                  authResponseHeaders:
+                    - X-Auth-User
+                    - X-Auth-Role
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring

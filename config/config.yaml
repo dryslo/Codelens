@@ -70,8 +70,17 @@ auth:
   # refresh в httpOnly+SameSite cookie (для браузера за single-origin reverse-proxy).
   cookie_secure: ${AUTH_COOKIE_SECURE:-false}     # true в prod (HTTPS); иначе браузер не сохранит Secure-cookie
   cookie_samesite: ${AUTH_COOKIE_SAMESITE:-lax}   # lax | strict | none
+  cookie_path: ${AUTH_COOKIE_PATH:-/}             # "/" => кука уходит и на /grafana,/adminer (гейт панелей forward-auth)
   rate_limit_attempts: ${AUTH_RL_ATTEMPTS:-10}    # попыток login/register на IP за окно (0 - выкл)
   rate_limit_window: ${AUTH_RL_WINDOW:-60}        # окно ограничителя частоты, сек
+
+# UI: ссылки на дашборды в Админке (видны admin'у, гейт - forward-auth). Пустой URL -> ссылка скрыта.
+# В large-деплое значения задаёт Helm per-overlay; для compose-профиля panels - через PANEL_*_URL.
+ui:
+  panels:
+    Grafana: ${PANEL_GRAFANA_URL:-}
+    Adminer: ${PANEL_ADMINER_URL:-}
+    Qdrant: ${PANEL_QDRANT_URL:-}
 
 # Ingest кодовой базы (ZIP/GitHub из админки).
 ingest:

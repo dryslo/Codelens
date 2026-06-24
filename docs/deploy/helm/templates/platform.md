@@ -17,6 +17,8 @@
 | [configmap.yaml](../../../../deploy/helm/codelens/templates/configmap.yaml) | всегда | `config.yaml` из `values.config` → ConfigMap; монтируется во все поды |
 | [secret.yaml](../../../../deploy/helm/codelens/templates/secret.yaml) | `secrets.create=true` | Opaque-Secret с DSN/JWT/ключами провайдеров (локалка; в GitOps - sealed-secrets) |
 | [ingress.yaml](../../../../deploy/helm/codelens/templates/ingress.yaml) | `ingress.enabled` | маршрутизация host → `/api`, `/auth` на backend, `/` на frontend |
+| [adminer.yaml](../../../../deploy/helm/codelens/templates/adminer.yaml) | `dbadmin.enabled` | админ-панель БД Adminer: Deployment + Service (stateless; доступ гейтит dbadmin-ingress) |
+| [dbadmin-ingress.yaml](../../../../deploy/helm/codelens/templates/dbadmin-ingress.yaml) | `dbadmin.enabled` + `ingress.enabled` | Ingress на `/adminer` за forward-auth `role=admin` |
 | [migrate-job.yaml](../../../../deploy/helm/codelens/templates/migrate-job.yaml) | всегда | pre-install/upgrade hook: `alembic upgrade head` |
 | [index-job.yaml](../../../../deploy/helm/codelens/templates/index-job.yaml) | `indexJob.enabled` | post-install/upgrade hook: индексация корпуса |
 | [servicemonitor.yaml](../../../../deploy/helm/codelens/templates/servicemonitor.yaml) | `monitoring.enabled` | скрейп `/metrics` Service'ов с лейблом `codelens.io/scrape=true` |
@@ -90,6 +92,9 @@ stringData:
   `auth` в [`config.yaml`](../../../../config/config.yaml)).
 - `HF_TOKEN` - токен Hugging Face для загрузки моделей embedder/reranker.
 
+Учётки панели БД в секрете нет: Adminer stateless, своего логина не имеет (вход - форма подключения
+к БД), см. [adminer.yaml](#admineryaml---админ-панель-бд-за-forward-auth).
+
 Имена ключей - контракт: они должны совпадать с `${VAR}` в ConfigMap и с `api_key_env` провайдеров,
 иначе подстановка в подах даст пустое значение.
 
@@ -128,22 +133,80 @@ paths:
 
 Аналог для docker-compose (тот же раскрой на reverse-proxy) - в [../../nginx.md](../../nginx.md).
 
-## migrate-job.yaml - миграции схемы хуком
+## adminer.yaml - админ-панель БД за forward-auth
 
-Job без условий, оформленный как Helm-хук **перед** install/upgrade. Прогоняет `alembic upgrade head`
-на primary (`-pg-rw`) до того, как стартуют поды сервисов, - чтобы backend не поднялся на устаревшей
-схеме:
+Под `{{- if .Values.dbadmin.enabled -}}` (по умолчанию выключено). Deployment + Service с Adminer -
+лёгкой однофайловой веб-админкой. Stateless: ни PVC, ни своего аккаунта; подключение задаётся на
+форме входа (`ADMINER_DEFAULT_SERVER` предзаполняет хост `<full>-pg-rw`). Внешнего доступа сам по себе
+не даёт - его гейтит [dbadmin-ingress.yaml](#dbadmin-ingressyaml---гейт-ingress-админ-панели); Service
+висит только внутри кластера.
+
+```yaml
+containers:
+  - name: adminer
+    image: {{ .Values.dbadmin.image }}       # adminer:4.x, слушает :8080
+    env:
+      - { name: ADMINER_DEFAULT_SERVER, value: <full>-pg-rw }
+    readinessProbe:
+      tcpSocket: { port: 8080 }
+```
+
+Adminer работает по относительным URL, поэтому за субпутём `/adminer` ему достаточно `stripPrefix`
+на ingress: отдельный заголовок-префикс не нужен. Своего логина у панели нет: вход - это форма
+подключения к БД (creds `codelens/codelens`),
+а единственный гейт доступа снаружи - `role=admin` через forward-auth.
+
+## dbadmin-ingress.yaml - гейт-Ingress админ-панели
+
+Под `{{- if and .Values.dbadmin.enabled .Values.ingress.enabled -}}`. Ставит Adminer на тот же host,
+что приложение, за гейтом forward-auth. Тот же host обязателен: forward-auth опирается на
+refresh-cookie `path=/` приложения, а она host-only и до субдомена/другого хоста не доходит. Шаблон
+ветвится по `ingress.className`: **traefik** (overlay k3s, основной путь) и **nginx**.
+
+**Traefik** - две `Middleware` на путь `/adminer`:
+
+```yaml
+forwardAuth:                       # гейт role=admin
+  address: http://<full>-backend.<ns>.svc.cluster.local:<port>/auth/forward-auth   # FQDN обязателен
+  authResponseHeaders: [X-Auth-User, X-Auth-Role]
+---
+stripPrefix: { prefixes: [/adminer] }                            # снять /adminer перед проксированием
+```
+
+Ingress навешивает их аннотацией в порядке `forwardAuth → stripPrefix`:
+`traefik.ingress.kubernetes.io/router.middlewares: "<ns>-<full>-forward-auth@kubernetescrd,<ns>-<full>-adminer-strip@kubernetescrd"`.
+**FQDN в `forwardAuth.address` критичен**: Traefik работает в namespace `kube-system` и короткое имя
+`<full>-backend` резолвил бы у себя (`no such host`). `forwardAuth` пускает только при `role=admin` в
+БД (как доступ к Grafana), иначе `401`.
+
+**nginx** (ветка `else`) - тот же гейт через external-auth: `auth-url` → `/auth/forward-auth`,
+`auth-signin` редиректит не-admin на `https://<host>/`, путь `/adminer(/|$)(.*)` + `rewrite-target: /$2`
+срезает префикс.
+
+Дашборд Qdrant сюда не выносится: его UI ходит в API по корне-относительным путям (`/collections`,
+`/cluster`) - под субпутём ломается, а на субдомен не дойдёт кука. Для разового доступа - port-forward
+к `:6333/dashboard`.
+
+## migrate-job.yaml - миграции схемы Argo Sync-хуком
+
+Job прогоняет `alembic upgrade head` на primary (`-pg-rw`). Оформлен как **Argo Sync-хук**, а не
+Helm `pre-install`: pre-install шёл бы до создания CNPG `Cluster` в основном синке, падал на
+отсутствии БД и блокировал весь синк (дедлок). Sync-хук же исполняется внутри синка с учётом
+sync-wave, а готовность БД обеспечивает initContainer:
 
 ```yaml
 annotations:
-  "helm.sh/hook": pre-install,pre-upgrade
-  "helm.sh/hook-weight": "5"
-  "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  argocd.argoproj.io/hook: Sync
+  argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  argocd.argoproj.io/sync-wave: "-1"          # после Cluster (wave -2), до app-подов (0)
 spec:
-  backoffLimit: 3
+  backoffLimit: 6
   template:
     spec:
       restartPolicy: Never
+      initContainers:
+        - name: wait-postgres                  # крутится, пока -pg-rw не примет соединение
+          command: ["sh", "-c", "until python -c '...create_connection((\"<full>-pg-rw\",5432))'; do sleep 3; done"]
       containers:
         - name: migrate
           image: {{ include "codelens.image" (dict "root" . "name" "backend") }}
@@ -152,12 +215,15 @@ spec:
             - secretRef: { name: {{ include "codelens.secretName" . }} }
 ```
 
-- `hook-weight: "5"` - порядок среди pre-хуков (меньше = раньше); запас оставлен под возможные хуки до миграции.
-- `hook-delete-policy: before-hook-creation,hook-succeeded` - старый Job удаляется перед созданием
-  нового (иначе immutable-конфликт по имени) и убирается после успеха, не засоряя namespace; при
-  падении Job остаётся для разбора логов.
-- Образ - тот же `backend` (в нём alembic и модели). DSN берётся из Secret через `envFrom`; ConfigMap
-  миграции не монтируют. `restartPolicy: Never` + `backoffLimit: 3` - до трёх попыток пода.
+- **sync-wave**: CNPG `Cluster` и его секрет помечены `sync-wave: "-2"` ([data.md](./data.md)),
+  миграция - `"-1"`, остальные ресурсы - дефолтный `0`. Argo прогоняет волны по порядку: БД → миграция
+  → поды сервисов.
+- **initContainer `wait-postgres`** ждёт, пока сервис `-pg-rw` начнёт принимать соединения, - не
+  завязываясь на то, умеет ли Argo health-check CNPG. Поэтому миграция не падает, даже если волна
+  стартовала раньше готовности primary.
+- **hook-delete-policy: BeforeHookCreation** - старый Job удаляется перед пересозданием (Job immutable).
+  Образ - тот же `backend` (в нём alembic и модели), DSN из Secret через `envFrom`. `backoffLimit: 6` -
+  запас попыток на время подъёма CNPG.
 
 ## index-job.yaml - опциональная индексация корпуса
 

@@ -1,0 +1,63 @@
+{{- if .Values.dbadmin.enabled -}}
+{{- $full := include "codelens.fullname" . -}}
+# Adminer - лёгкая веб-админка БД (один PHP-файл, относительные URL). Доступ снаружи гейтит
+# forward-auth (role=admin) через dbadmin-ingress. Stateless: подключение задаётся на форме входа
+# (своего аккаунта и PVC нет; ADMINER_DEFAULT_SERVER лишь предзаполняет поле сервера).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-adminer
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: adminer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "codelens.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: adminer
+  template:
+    metadata:
+      labels:
+        {{- include "codelens.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: adminer
+    spec:
+      {{- with .Values.dbadmin.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dbadmin.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: adminer
+          image: {{ .Values.dbadmin.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: ADMINER_DEFAULT_SERVER, value: {{ printf "%s-pg-rw" $full | quote }} }
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with .Values.dbadmin.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-adminer
+  labels:
+    {{- include "codelens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: adminer
+spec:
+  selector:
+    {{- include "codelens.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: adminer
+  ports:
+    - { name: http, port: 80, targetPort: 8080 }
+{{- end }}

@@ -29,10 +29,11 @@ deploy/gitops/sealed/
 ## Шаг 0 - разово: контроллер + CLI
 Контроллер ставится один раз (инфраструктура, ставится вне Argo):
 ```bash
-helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
-helm install sealed-secrets sealed-secrets/sealed-secrets \
-  -n kube-system --set fullnameOverride=sealed-secrets-controller
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
 ```
+Манифест создаёт Deployment `sealed-secrets-controller` в `kube-system` - имя по умолчанию, которое
+ждёт `kubeseal` (отдельный helm-чарт не нужен; репозиторий чарта Bitnami отъехал в 2025).
+
 CLI `kubeseal` - из релизов https://github.com/bitnami-labs/sealed-secrets/releases (или `brew install kubeseal`).
 
 ## Шаг 1 - задать реальные значения (локально, не в git)

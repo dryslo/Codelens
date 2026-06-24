@@ -16,3 +16,6 @@ codelens.egg-info/
 deploy/gitops/sealed/secrets.*.env
 # Локальные заметки/объяснения - не коммитятся
 _local/
+
+# AmneziaWG: сгенерированные конфиги с приватными ключами (никогда в git)
+deploy/amnezia/out/

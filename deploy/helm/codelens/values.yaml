@@ -48,6 +48,13 @@ config:
     enabled: true
     access_ttl: 900
     refresh_ttl: 2592000
+  # OIDC-провайдеры (вход через внешний IdP). clientId публичен (уходит на фронт), не секрет.
+  oidc:
+    google:
+      clientId: ""        # Google OAuth Web client_id. Пусто -> кнопка Google-входа скрыта.
+
+  # Ссылки на дашборды в Админке: {Подпись: URL}. Пусто -> блок не рисуется. Задаётся per-overlay.
+  panels: {}
 
 # --- Секреты (Secret в кластере). В prod заменить на SOPS/sealed-secrets/external-secrets. ---
 secrets:
@@ -141,6 +148,7 @@ worker:
     requests: { cpu: "500m", memory: 512Mi }
     limits:   { cpu: "2",    memory: 2Gi }
   nodeSelector: {}
+  tolerations: []           # для выноса на выделенный узел (напр. весь staging на одном node-dev)
 
 # --- Stateful ---
 qdrant:
@@ -170,6 +178,8 @@ redis:
   image: redis:7
   storage: 5Gi
   storageClass: ""
+  nodeSelector: {}
+  tolerations: []           # как worker: для прибивки к выделенному узлу окружения
 
 ingress:
   enabled: true
@@ -177,7 +187,19 @@ ingress:
   host: codelens.local
   apiPath: true           # true -> /api/* проксируется на backend
   authPath: false         # true -> /auth/* идёт на backend (single-origin httpOnly refresh-cookie)
+  tls: false              # true -> spec.tls на ingress.host, секрет <full>-tls (заполняет cert-manager)
   annotations: {}
+
+# --- Администрирование БД (Adminer за forward-auth). По умолчанию выкл. ---
+# Доступ гейтит role=admin в БД через /auth/forward-auth (как Grafana) на /adminer того же host.
+# Adminer stateless (своего аккаунта нет, подключение на форме входа). traefik -> Middleware
+# forwardAuth+stripPrefix; nginx -> auth-аннотации. См. dbadmin-ingress.yaml / adminer.yaml.
+dbadmin:
+  enabled: false
+  image: adminer:4.8.1
+  resources: {}
+  nodeSelector: {}        # на k3s со staging-узлом: { codelens.io/env: staging }
+  tolerations: []
 
 # Job индексации корпуса (post-install/upgrade hook). По умолчанию выкл.
 indexJob:

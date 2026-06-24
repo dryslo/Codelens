@@ -76,6 +76,17 @@ def test_refresh_rotation(tmp_path):
     assert "error" in a.refresh(rt)                          # старый refresh отозван (ротация)
 
 
+def test_restore_no_rotation(tmp_path):
+    a = _auth(tmp_path)
+    a.register("bob", "pw")
+    rt = a.login_password("bob", "pw")["refresh_token"]
+    r1 = a.restore(rt)
+    # restore (F5-персист): новый access, тот же refresh-токен, он остаётся валидным многократно.
+    assert r1.get("access_token") and r1["refresh_token"] == rt
+    assert a.restore(rt).get("access_token")                 # повторный F5 тем же токеном - ок
+    assert a.restore("nope").get("error")                    # невалидный - ошибка
+
+
 def test_logout_revokes_access_and_refresh(tmp_path):
     a = _auth(tmp_path)
     a.register("c", "pw")

@@ -146,7 +146,8 @@ image:
 | `retrieval.flags` | режимы техник ретривера (`bm25`/`multiquery`/`hyde`/`rerank`/`mmr`): `off`/`ui`/`thinking`/`fast`. |
 | `llm` | `kind: remote` (backend/ретривер ходят в llm-gateway), провайдеры и `fast`-модель. |
 | `jobs` | `kind: redis` - ingest исполняет worker-под (RQ); в small/dev было бы `inprocess`. |
-| `auth` | включён, TTL access/refresh-токенов. |
+| `auth` | включён, TTL access/refresh-токенов; `oidc.google.clientId` - Web client_id (пусто → кнопка Google-входа скрыта). |
+| `ui.panels` | `{Подпись: URL}` ссылок на дашборды в Админке (`config.panels`, per-overlay): staging - `/grafana`,`/adminer`,`/argocd`; prod - Grafana + Argo CD абсолютной ссылкой. Пусто → блок скрыт. |
 
 ### Per-service блоки (stateless)
 
@@ -249,6 +250,31 @@ monitoring:
 
 По умолчанию выключено - включается только на кластере с Prometheus Operator. Подробности
 скрейпа и дашборда - в [наблюдаемости](../../util/observability.md).
+
+### dbadmin
+
+```yaml
+dbadmin:
+  enabled: false         # тумблер админ-панели БД (Adminer за forward-auth на /adminer)
+  image: adminer:4.8.1
+  resources: {}
+  nodeSelector: {}       # на k3s: { codelens.io/env: staging } | { codelens.io/pool: data }
+  tolerations: []
+```
+
+`enabled: true` рендерит Adminer (Deployment+Service) и dbadmin-ingress, который гейтит доступ через
+`/auth/forward-auth` (`role=admin` в БД, как у Grafana). Adminer stateless: ни PVC, ни своего
+аккаунта - подключение к БД задаётся на форме входа (хост предзаполнен `ADMINER_DEFAULT_SERVER`),
+секрета панели нет.
+
+Требование: панели висят на **том же host**, что приложение. forward-auth опирается на
+refresh-cookie `path=/` приложения, а такая cookie прикладывается только в пределах своего домена -
+на отдельном host гейт не увидит сессию. `qdrant: true` добавляет путь `/qdrant` за тем же гейтом
+(с оговоркой про корне-относительные пути UI Qdrant, см. [platform](./templates/platform.md)).
+
+Реализация auth-аннотаций - ingress-nginx (external auth). Для traefik (overlay k3s,
+`ingress.className: traefik`) аналога аннотаций нет: тот же гейт собирается через `Middleware` типа
+`forwardAuth`. Подробности обоих манифестов - в [platform](./templates/platform.md).
 
 ### indexJob
 

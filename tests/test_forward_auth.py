@@ -80,3 +80,14 @@ def test_forward_auth_user_401(tmp_path):
 
 def test_forward_auth_no_cookie_401(tmp_path):
     assert _client(_auth(tmp_path)).get("/auth/forward-auth").status_code == 401
+
+
+def test_forward_auth_stable_after_restore(tmp_path):
+    # restore (F5) не ротирует refresh -> та же кука валидна, панели держатся.
+    auth = _auth(tmp_path)
+    auth.ensure_admin("root", "pw")
+    rt = auth.login_password("root", "pw")["refresh_token"]
+    auth.restore(rt)
+    c = _client(auth)
+    c.cookies.set("codelens_rt", rt)
+    assert c.get("/auth/forward-auth").status_code == 200

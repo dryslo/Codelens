@@ -22,8 +22,9 @@ Ingest идёт не в backend, а через очередь RQ (`JOBS_KIND=red
 | qdrant | `qdrant/qdrant:v1.12.4` | - | (всегда) | `qdrant_data` | векторный стор |
 | postgres | `postgres:16` | - | (всегда) | `pg_data` | реляционка (refresh-токены, реестр, чаты) |
 | redis | `redis:7` | - | (всегда) | - | кэш + очередь RQ |
-| nginx | `nginx:1.27-alpine` | 80:80 | `panels` | `nginx.conf` (ro) | single-origin reverse-proxy + forward-auth |
-| grafana | `grafana/grafana:11.2.0` | - | `panels` | provisioning + dashboards (ro) | панели за forward-auth |
+| nginx | `nginx:1.27-alpine` | 80:80, 8081:8081 | `panels` | `nginx.conf` (ro) | single-origin reverse-proxy + forward-auth (80 - приложение+панели, 8081 - дашборд Qdrant) |
+| adminer | `adminer:4.8.1` | - | `panels` | - | админка Postgres за forward-auth (`/adminer`) |
+| grafana | `grafana/grafana:11.2.0` | - | `panels` | provisioning + dashboards (ro) | панели за forward-auth (`/grafana`) |
 | prometheus | `prom/prometheus:v2.54.1` | - | `panels` | `prometheus.yml` (ro) | сбор метрик |
 
 Сервисы без профиля поднимаются на `docker compose up`. Сервисы с профилем (`reranker`, `panels`)
@@ -68,11 +69,19 @@ frontend:
   environment:
     ROLE: frontend
     BACKEND_URL: http://backend:8080
+    PANEL_GRAFANA_URL: ${PANEL_GRAFANA_URL:-}   # ссылки на дашборды в Админке (пусто -> скрыты)
+    PANEL_ADMINER_URL: ${PANEL_ADMINER_URL:-}
+    PANEL_QDRANT_URL: ${PANEL_QDRANT_URL:-}
   depends_on: [backend]
 ```
 
 - Тонкий Streamlit-клиент. Своего ML/БД не держит, ходит в backend по `BACKEND_URL`. Единственная
   точка входа для пользователя на `:8501` (или `http://localhost` через nginx в профиле `panels`).
+- `PANEL_*_URL` наполняют блок «Дашборды» в Админке (`cfg.ui.panels`). По умолчанию пусты - в `make up`
+  панелей нет. Для профиля `panels`: `PANEL_GRAFANA_URL=/grafana PANEL_ADMINER_URL=/adminer/
+  PANEL_QDRANT_URL=http://localhost:8081/dashboard docker compose --profile panels up`. Adminer - со
+  слешем (`/adminer/`): его сессионная кука scoped на `path=/adminer/`, без слеша браузер сидит на
+  `/adminer?...` и кука не уходит - логин зацикливается.
 - `depends_on: [backend]` - условие по умолчанию `service_started` (контейнер запущен, без проверки
   готовности).
 
@@ -220,21 +229,43 @@ redis:
   восстанавливается, а очередь - рабочий поток).
 - Учётные данные Postgres (`codelens`/`codelens`/`codelens`) совпадают с `DATABASE_DSN` в anchor.
 
-## nginx, grafana, prometheus (профиль panels)
+## nginx, adminer, grafana, prometheus (профиль panels)
 
 ```yaml
 nginx:
   image: nginx:1.27-alpine
   profiles: ["panels"]
   volumes: ["./nginx/nginx.conf:/etc/nginx/nginx.conf:ro"]
-  ports: ["80:80"]
-  depends_on: [frontend, backend, grafana]
+  ports: ["80:80", "8081:8081"]      # 80 - приложение+панели; 8081 - дашборд Qdrant (свой origin)
+  depends_on: [frontend, backend, grafana, adminer, qdrant]
 ```
 
-- Профиль `panels` (`docker compose --profile panels up`) добавляет наблюдаемость за reverse-proxy.
-  Всё сводится в один origin `http://localhost`: приложение на `/`, Grafana на `/grafana`. Доступ к
-  панели гейтит nginx через forward-auth - подзапрос на `/auth/forward-auth`, который проверяет
-  refresh-куку и пропускает только `role=admin`.
+- Профиль `panels` (`docker compose --profile panels up`) добавляет за reverse-proxy три
+  административные панели. Всё сводится в один origin `http://localhost`: приложение на `/`, Grafana
+  на `/grafana`, Adminer на `/adminer`. Дашборд Qdrant вынесен на отдельный порт `http://localhost:8081`
+  (его UI ходит в API по корне-относительным путям, под субпуть не годится - разбор в
+  [./nginx.md](./nginx.md)). Доступ к каждой панели гейтит nginx через forward-auth - подзапрос на
+  `/auth/forward-auth`, который проверяет refresh-куку и пропускает только `role=admin`.
+- nginx публикует два порта: `80` (приложение + Grafana + Adminer) и `8081` (отдельный origin
+  дашборда Qdrant). `depends_on` ждёт запуска `adminer` и `qdrant` - оба за гейтом nginx.
+
+```yaml
+adminer:
+  image: adminer:4.8.1
+  profiles: ["panels"]
+  environment:
+    ADMINER_DEFAULT_SERVER: postgres   # предзаполнить хост БД (имя сервиса compose)
+  depends_on: [postgres]
+```
+
+- Веб-админка Postgres - Adminer (один PHP-файл) за nginx `/adminer` (forward-auth, `role=admin`).
+  Прямого порта наружу нет - единственный вход через прокси.
+- **Без собственного логина-аккаунта**: вход в Adminer - это форма подключения к БД (System,
+  Server, User, Password), а доступ к самой панели уже гейтит forward-auth по `role=admin`.
+  `ADMINER_DEFAULT_SERVER` лишь предзаполняет хост (`postgres`); креды - `codelens`/`codelens`.
+- **Stateless**: ни тома, ни env-секретов. Adminer работает по относительным URL, поэтому за
+  субпутём `/adminer` ему не нужен `X-Script-Name` - префикс снимает `proxy_pass` в nginx
+  (разбор location - [./nginx.md](./nginx.md)).
 
 ```yaml
 grafana:

@@ -32,7 +32,8 @@ seal.sh  ──шифрует публичным ключом──►  SealedSe
   `Secret/codelens-secrets`.
 - Поды приложения читают этот Secret через `envFrom.secretRef`. Ключи: `DATABASE_DSN`, `JWT_SECRET`,
   `GROQ_API_KEY`, `GEMINI_API_KEY`, `ADMIN_LOGIN`, `ADMIN_PASSWORD`, `HF_TOKEN`. Имена ключей обязаны
-  совпадать с `${VAR}` в `config.yaml` (см. шаблон Secret чарта).
+  совпадать с `${VAR}` в `config.yaml` (см. шаблон Secret чарта). Панель Adminer своей учётки в
+  секрете не держит (stateless).
 
 Скоуп шифрования - strict: `SealedSecret` расшифруется только в том же namespace и под тем же именем
 (`codelens-secrets` в `codelens-<env>`). При переименовании или переносе в другой namespace требуется

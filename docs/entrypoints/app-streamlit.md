@@ -88,18 +88,22 @@ class Ctx:
 
 - `Ctx` - единый контекст сессии, прокидывается во вкладки. Собирается из `Components` (composition root) - dataclass из [factory](../factory.md), а не словарь.
 - `_build_comp()` под `@st.cache_resource` строит composition root один раз на процесс. Без кэша на каждом нажатии тумблера заново поднимались бы e5-эмбеддер (~1 ГБ VRAM), BM25-индекс, открывался Chroma/Qdrant. Чистится явно через `st.cache_resource.clear()` после индексации/удаления источника.
+- `_session_backend(comp)` - для `role=frontend` создаёт **отдельный `HttpBackend` на сессию** (хранится в `st.session_state`), а не берёт общий из кэшированного `comp`. Иначе `HttpBackend.token` (Bearer) был бы один на процесс, и логин одного браузера перетирал бы токен у всех остальных. У `LocalBackend` (`role=all`) токена нет - возвращается общий инстанс.
 
 ### Cookie-персист и refresh
 
 ```python
 REFRESH_COOKIE = "codelens_rt"
-_cookies = CookieController()
+
+def _cc() -> CookieController:        # контроллер на сессию, не на процесс
+    return CookieController()
 ```
 
 - Refresh-токен живёт в cookie `codelens_rt`, access - в `st.session_state` и Bearer-заголовке backend.
+- `_cc()` создаёт `CookieController` **в рамках текущей сессии**, а не модульным глобалом. Контроллер кэширует куки в `self.__cookies` (привязан к `st.session_state[key]`); глобал создавался бы один раз на импорт (вне сессии), и его dict шарился бы между всеми браузерами - `set()` одного юзера протекал бы в `get()` другого (один вход на всех). Конструктор per-run привязывается к `st.session_state` своей сессии, после первого ранда берёт из неё без round-trip.
 - `_wait_for_cookies()` ждёт, пока cookie-компонент отдаст значения: до первого round-trip стор `None`, `set`/`get` падают, и логин не переживает F5. Ограничено пятью ранами, дальше работа без cookie.
 - `_apply_session()` сохраняет выданную пару: память, Bearer и cookie с refresh. Cookie ставится `SameSite=Strict` против CSRF; `Secure` - в prod (HTTPS), управляется `auth.cookie_secure`.
-- `ensure_authenticated()`: без авторизации - `anon`/`admin`. Иначе при отсутствии сессии читается refresh из cookie и обновляется (ротированный refresh переписывает cookie); протухший или отозванный - cookie удаляется и показывается экран входа.
+- `ensure_authenticated()`: без авторизации - `anon`/`admin`. Иначе при отсутствии сессии refresh читается из cookie (`_read_refresh_cookie()`: сперва `st.context.cookies`, затем JS-контроллер) и сессия восстанавливается через `restore` (`/auth/session`, без ротации - чтобы F5 не отзывал куку и вход не слетал); протухший или отозванный - cookie удаляется, показывается экран входа.
 - `auth is not None` (HTTP-режим, отдельный `AuthClient`) против fallback на методы backend - один и тот же контракт login/register/refresh/logout.
 
 ## Карточка результата `render_card` (`frontend/components.py`)
@@ -378,7 +382,29 @@ def _matrix_eval(ctx: Ctx) -> None:
 
 ## Вкладка «Админка» (`frontend/tabs/admin.py`)
 
-Раздел доступен только роли `admin`. Управление индексом и фоновый ingest.
+Раздел доступен только роли `admin`. Дашборды, управление индексом и фоновый ingest.
+
+### Дашборды (`_panels`)
+
+Вверху раздела - блок ссылок на внешние панели (Grafana, Adminer, Argo CD). Источник URL -
+`cfg.ui.panels` (`{Подпись: URL}`); пустой адрес ссылку пропускает, пустой блок не рисуется.
+
+```python
+def _panels(ctx: Ctx) -> None:
+    panels = (ctx.cfg.get("ui") or {}).get("panels") or {}
+    links = [(name, url) for name, url in panels.items() if url]
+    if not links:
+        return
+    st.subheader("📊 Дашборды")
+    for col, (name, url) in zip(st.columns(len(links)), links):
+        col.link_button(name, url, use_container_width=True)
+```
+
+- Значения задаёт деплой: Helm рендерит `config.panels` per-overlay (staging - `/grafana`,
+  `/adminer`, `/argocd`; prod - без Adminer, Argo CD абсолютной ссылкой на staging-хост),
+  compose-профиль `panels` - через `PANEL_*_URL`. Сами панели за тем же forward-auth, что и `/auth/forward-auth`,
+  поэтому ссылки осмысленны только под admin-сессией (разбор - [nginx](../deploy/nginx.md)).
+- Кнопки - subpath того же хоста, отдельного origin не требуют (кроме дашборда Qdrant на `:8081`).
 
 ```python
 def render(ctx: Ctx) -> None:

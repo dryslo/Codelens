@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, cast
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 
 from src.auth import ratelimit
 from src.auth.deps import bearer_token, get_auth, get_current_user
@@ -23,19 +24,19 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _set_refresh_cookie(response: Response, auth: AuthService, token: str) -> None:
-    """Положить refresh в httpOnly-cookie (path=/auth), если cookie включены и токен не пуст."""
+    """Положить refresh в httpOnly-cookie (path из cfg.cookie_path), если cookie включены и токен не пуст."""
     cfg = auth.cfg
     if not cfg.cookie_enabled or not token:
         return
     ss = cfg.cookie_samesite if cfg.cookie_samesite in ("lax", "strict", "none") else "lax"
     response.set_cookie(cfg.cookie_name, token, max_age=cfg.refresh_ttl, httponly=True,
                         secure=cfg.cookie_secure,
-                        samesite=cast(Literal["lax", "strict", "none"], ss), path="/auth")
+                        samesite=cast(Literal["lax", "strict", "none"], ss), path=cfg.cookie_path)
 
 
 def _clear_refresh_cookie(response: Response, auth: AuthService) -> None:
-    """Удалить refresh-cookie."""
-    response.delete_cookie(auth.cfg.cookie_name, path="/auth")
+    """Удалить refresh-cookie (тем же path, что и при установке, иначе браузер её не снимет)."""
+    response.delete_cookie(auth.cfg.cookie_name, path=auth.cfg.cookie_path)
 
 
 def _rate_limit(scope: str) -> Callable[..., None]:
@@ -83,6 +84,21 @@ def refresh(request: Request, response: Response,
     return res
 
 
+@router.post("/session")
+def session(request: Request, response: Response,
+            r: RefreshReq | None = Body(default=None),
+            auth: AuthService = Depends(get_auth)) -> dict:
+    """Восстановить сессию по refresh без ротации (тот же refresh, новый access); из тела или cookie."""
+    token = (r.refresh_token if r else None) or request.cookies.get(auth.cfg.cookie_name)
+    if not token:
+        raise HTTPException(status_code=401, detail="missing refresh token")
+    res = auth.restore(token)
+    if "error" in res:
+        raise HTTPException(status_code=401, detail=res["error"])
+    _set_refresh_cookie(response, auth, res.get("refresh_token", ""))
+    return res
+
+
 @router.post("/oidc/{provider}")
 def oidc(provider: str, response: Response, id_token: str = Body(..., embed=True),
          auth: AuthService = Depends(get_auth)) -> dict:
@@ -92,6 +108,31 @@ def oidc(provider: str, response: Response, id_token: str = Body(..., embed=True
         raise HTTPException(status_code=401, detail=res["error"])
     _set_refresh_cookie(response, auth, res.get("refresh_token", ""))
     return res
+
+
+@router.post("/oidc/{provider}/callback")
+def oidc_callback(provider: str, request: Request, credential: str = Form(default=""),
+                  id_token: str = Form(default=""), g_csrf_token: str = Form(default=""),
+                  auth: AuthService = Depends(get_auth)) -> Response:
+    """Принять form_post с id_token от Google: выдать сессию и увести на фронт.
+
+    Google (response_type=id_token, response_mode=form_post) постит сюда токен полем `id_token`;
+    GIS-поток присылал бы его как `credential` + `g_csrf_token` - поддержаны оба. Логиним по токену,
+    ставим refresh-cookie и редиректим на корень фронта; сессию подхватывает фронт по куке (как при F5).
+    """
+    token = credential or id_token
+    if not token:
+        raise HTTPException(status_code=400, detail="oidc callback without token")
+    if g_csrf_token:  # GIS-поток: проверяем double-submit cookie. Плейн-OAuth CSRF-поле не шлёт.
+        cookie_csrf = request.cookies.get("g_csrf_token")
+        if not cookie_csrf or cookie_csrf != g_csrf_token:
+            raise HTTPException(status_code=400, detail="oidc csrf check failed")
+    res = login_with_id_token(auth, provider, token)
+    if "error" in res:
+        raise HTTPException(status_code=401, detail=res["error"])
+    redirect = RedirectResponse(url="/", status_code=303)
+    _set_refresh_cookie(redirect, auth, res.get("refresh_token", ""))
+    return redirect
 
 
 @router.get("/forward-auth")

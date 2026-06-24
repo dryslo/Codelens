@@ -6,11 +6,29 @@ image:
   tag: latest                  # перезаписывается CI на git-SHA
 
 ingress:
-  host: codelens.example.com
+  host: codelens.fun
+  authPath: true                                       # /auth/* -> backend (callback Google OIDC)
+  tls: true                                            # HTTPS обязателен: refresh-cookie с secure-флагом
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod   # TLS через cert-manager (если установлен)
 
 # Полный large-масштаб берётся из базового values.yaml (HPA включены, qdrant x3, postgres x3).
+
+# Наблюдаемость: prod отдаёт ServiceMonitor + дашборд (скрейпит общий kube-prometheus-stack).
+monitoring:
+  enabled: true
+
+# Google-вход: тот же OAuth-клиент, что и staging (в Google добавить origin https://codelens.fun
+# и redirect https://codelens.fun/auth/oidc/google/callback). login_uri выведется из ingress.host.
+config:
+  oidc:
+    google:
+      clientId: "657334521650-f06agmbiql4mj5adn1u5ffr3lolvk1pq.apps.googleusercontent.com"
+  # Дашборды в Админке. Grafana - subpath prod-хоста; Adminer в prod не разворачивается; Argo CD -
+  # один на кластер (ingress на staging-хосте), поэтому абсолютная ссылка.
+  panels:
+    Grafana: /grafana
+    Argo CD: https://staging.codelens.fun/argocd
 
 # Prod-секреты в git не хранятся. Чарт Secret не создаёт (create: false); вместо него в namespace
 # codelens-prod лежит Secret с именем codelens-secrets, созданный через sealed-secrets /

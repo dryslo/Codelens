@@ -11,7 +11,7 @@ grafana-сайдкар kube-prometheus-stack - разбор и список ме
 для обоих вариантов; здесь - только обвязка сбора и отображения.
 
 Поднимается в профиле `panels` вместе с nginx и Grafana (разбор сервисного блока -
-[`./docker-compose.md`](./docker-compose.md#nginx-grafana-prometheus-профиль-panels)).
+[`./docker-compose.md`](./docker-compose.md#nginx-adminer-grafana-prometheus-профиль-panels)).
 
 ## prometheus.yml - сбор метрик
 
@@ -107,6 +107,6 @@ Grafana в этом профиле открыта не напрямую, а че
 
 - [`../util/observability.md`](../util/observability.md) - метрики, k8s-наблюдаемость, PromQL.
 - [`./nginx.md`](./nginx.md) - reverse-proxy и гейтинг доступа к Grafana.
-- [`./docker-compose.md`](./docker-compose.md#nginx-grafana-prometheus-профиль-panels) - сервисный
-  блок профиля `panels`.
+- [`./docker-compose.md`](./docker-compose.md#nginx-adminer-grafana-prometheus-профиль-panels) -
+  сервисный блок профиля `panels`.
 - [`./README.md`](./README.md) - обзор deploy-обвязки.

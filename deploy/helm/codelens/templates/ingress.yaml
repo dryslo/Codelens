@@ -14,6 +14,12 @@ spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className }}
   {{- end }}
+  {{- if .Values.ingress.tls }}
+  # cert-manager (по аннотации cluster-issuer) выпустит сертификат и положит его в этот секрет.
+  tls:
+    - hosts: [ {{ .Values.ingress.host | quote }} ]
+      secretName: {{ $full }}-tls
+  {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
       http:

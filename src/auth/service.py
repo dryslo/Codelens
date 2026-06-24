@@ -44,15 +44,20 @@ class AuthService:
         self.cfg = cfg
 
     # --- выдача токенов ---
-    def _issue(self, user: dict) -> dict:
+    def _issue_access(self, user: dict, refresh_token: str) -> dict:
+        """Выдать новый access для существующего refresh-токена (без создания нового refresh)."""
         pub = _public(user)
         access, jti = make_access_token(self.cfg.secret, self.cfg.alg, user, self.cfg.access_ttl)
         if self.cache is not None:
             self.cache.set(f"access:{jti}", pub, ttl=self.cfg.access_ttl)
+        return {"access_token": access, "refresh_token": refresh_token,
+                "token_type": "bearer", "user": pub}
+
+    def _issue(self, user: dict) -> dict:
         rt = make_refresh_token()
         self.refresh_tokens.create(new_jti(), user["id"], hash_refresh(rt),
                                    _utcnow() + timedelta(seconds=self.cfg.refresh_ttl))
-        return {"access_token": access, "refresh_token": rt, "token_type": "bearer", "user": pub}
+        return self._issue_access(user, rt)
 
     # --- регистрация / логин паролем ---
     def register(self, login: str, password: str) -> dict:
@@ -99,6 +104,16 @@ class AuthService:
         if not user:
             return {"error": "invalid refresh token"}
         return self._issue(user)
+
+    def restore(self, refresh_token: str) -> dict:
+        """Восстановить сессию по refresh без ротации: тот же refresh-токен, новый access."""
+        row = self.refresh_tokens.get_active_by_hash(hash_refresh(refresh_token), _utcnow())
+        if not row:
+            return {"error": "invalid refresh token"}
+        user = self.users.get(row["user_id"])
+        if not user:
+            return {"error": "invalid refresh token"}
+        return self._issue_access(user, refresh_token)
 
     def logout(self, access_token: str | None) -> dict:
         """Снять access-сессию и отозвать все refresh-токены пользователя."""

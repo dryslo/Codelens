@@ -22,6 +22,13 @@ services:
     environment:
       ROLE: frontend
       BACKEND_URL: http://backend:8080
+      # Ссылки на дашборды в Админке. Пусто по умолчанию (в `make up` панелей нет); для профиля panels
+      # резолвятся через nginx. Включить: PANEL_GRAFANA_URL=/grafana PANEL_ADMINER_URL=/adminer/ \
+      # PANEL_QDRANT_URL=http://localhost:8081/dashboard docker compose --profile panels up.
+      # Adminer - со слешем: сессионная кука scoped на /adminer/.
+      PANEL_GRAFANA_URL: ${PANEL_GRAFANA_URL:-}
+      PANEL_ADMINER_URL: ${PANEL_ADMINER_URL:-}
+      PANEL_QDRANT_URL: ${PANEL_QDRANT_URL:-}
     depends_on: [backend]
   backend:
     build: { context: .., dockerfile: deploy/Dockerfile.backend }
@@ -92,14 +99,23 @@ services:
   redis:
     image: redis:7
   # Внешние панели за forward-auth (профиль panels). Запуск: docker compose --profile panels up.
-  # Всё в одном origin через nginx: приложение на http://localhost, Grafana на /grafana
-  # открывается только для role=admin (проверка - /auth/forward-auth по refresh-куке).
+  # Всё в одном origin через nginx: приложение на http://localhost; Grafana на /grafana, Adminer на
+  # /adminer, дашборд Qdrant на http://localhost:8081 - открываются только для role=admin
+  # (проверка - /auth/forward-auth по refresh-куке).
   nginx:
     image: nginx:1.27-alpine
     profiles: ["panels"]
     volumes: ["./nginx/nginx.conf:/etc/nginx/nginx.conf:ro"]
-    ports: ["80:80"]
-    depends_on: [frontend, backend, grafana]
+    ports: ["80:80", "8081:8081"]      # 80 - приложение+панели; 8081 - дашборд Qdrant (свой origin)
+    depends_on: [frontend, backend, grafana, adminer, qdrant]
+  # Администрирование Postgres - Adminer (один файл, stateless). За nginx /adminer (forward-auth,
+  # role=admin - единственный гейт). Своего логина нет: подключение к БД задаётся на форме входа.
+  adminer:
+    image: adminer:4.8.1
+    profiles: ["panels"]
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres   # предзаполнить хост БД (имя сервиса compose)
+    depends_on: [postgres]
   grafana:
     image: grafana/grafana:11.2.0
     profiles: ["panels"]
