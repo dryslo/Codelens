@@ -126,6 +126,11 @@ def _cookie_secure(ctx: Ctx) -> bool:
     return str((ctx.cfg.get("auth") or {}).get("cookie_secure", "false")).lower() == "true"
 
 
+def _cookie_samesite(ctx: Ctx) -> str:
+    ss = str((ctx.cfg.get("auth") or {}).get("cookie_samesite", "lax")).lower()
+    return ss if ss in ("lax", "strict") else "lax"
+
+
 def _apply_session(ctx: Ctx, res: dict) -> None:
     """Сохраняет выданную пару токенов в память + Bearer. Cookie пишется на рендер-ране (см. ниже)."""
     st.session_state.auth = res
@@ -145,10 +150,10 @@ def _persist_refresh_cookie(ctx: Ctx) -> None:
     if not rt or st.session_state.get("_cookie_persisted"):
         return
     try:
-        # SameSite=Strict (дефолт контроллера) против CSRF; Secure - в prod (HTTPS).
+        # SameSite из конфига (дефолт lax): lax надёжнее шлёт куку на навигацию к панелям, чем strict.
         # path="/" - чтобы кука уходила и на /grafana, /adminer и пр. (гейт панелей по forward-auth).
         _cc().set(REFRESH_COOKIE, rt, max_age=_refresh_ttl(ctx),
-                  same_site="strict", secure=_cookie_secure(ctx), path="/")
+                  same_site=_cookie_samesite(ctx), secure=_cookie_secure(ctx), path="/")
         st.session_state["_cookie_persisted"] = True
     except Exception:  # noqa: BLE001 - стор cookie ещё не готов; повторим на следующем ране
         pass
