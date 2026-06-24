@@ -30,6 +30,7 @@ def search(r: SearchReq) -> dict:
     return {"results": BACKEND.search(r.query, r.k, r.mode, flags=r.flags, filters=r.filters)}
 ```
 - FastAPI по аннотации `r: SearchReq` парсит и валидирует JSON-тело, возвращаемый dict сериализуется в JSON. `HttpBackend.search` читает ключ `results`.
+- `GET /index/stats` (тоже `require_user`) - статистика индекса (чанки/источники/языки) для вкладки Поиск: она видна всем ролям и берёт отсюда фильтры и признак пустоты индекса. Отдельно от `/admin/stats` (`require_admin`) специально - иначе обычный юзер получал бы 403 и видел «Индекс пуст».
 
 ```python
 @protected.post("/chat")

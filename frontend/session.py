@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from src.factory import Components
 
 REFRESH_COOKIE = "codelens_rt"
+GATE_COOKIE = "codelens_gate"      # нерротируемый токен для forward-auth панелей (см. src/auth/tokens.py)
 _cookies = CookieController()
 
 
@@ -40,12 +41,30 @@ def _build_comp() -> Components:
     return build()
 
 
+def _session_backend(comp: Components) -> object:
+    """Backend на каждую сессию (а не на процесс) - чтобы Bearer-токен не шарился между браузерами.
+
+    comp кэширован @st.cache_resource (один на процесс), поэтому общий HttpBackend.token перетирался
+    бы при каждом логине и последний вход «выигрывал» для всех. У LocalBackend (role=all) токена нет
+    - возвращаем общий. HttpBackend лёгкий (только URL+token), создание на сессию дёшево.
+    """
+    shared = comp.backend
+    if not hasattr(shared, "token"):          # LocalBackend - общий ок
+        return shared
+    b = st.session_state.get("_backend")
+    if b is None:
+        from src.clients.backend import HttpBackend
+        b = HttpBackend(shared.url)
+        st.session_state["_backend"] = b
+    return b
+
+
 def get_context() -> Ctx:
     """Собирает контекст сессии: comp, конфиг и признак включённой авторизации."""
     comp = _build_comp()
     cfg = comp.cfg or load_config()
     auth_on = str((cfg.get("auth") or {}).get("enabled", "false")).lower() == "true"
-    return Ctx(comp=comp, backend=comp.backend, auth=comp.auth, cfg=cfg, auth_on=auth_on)
+    return Ctx(comp=comp, backend=_session_backend(comp), auth=comp.auth, cfg=cfg, auth_on=auth_on)
 
 
 def load_policy(ctx: Ctx) -> None:
@@ -75,10 +94,11 @@ def _wait_for_cookies() -> None:
 
 
 def _remove_refresh_cookie() -> None:
-    try:
-        _cookies.remove(REFRESH_COOKIE)
-    except Exception:  # noqa: BLE001 - cookie ещё не загружена/уже отсутствует
-        pass
+    for name in (REFRESH_COOKIE, GATE_COOKIE):
+        try:
+            _cookies.remove(name)
+        except Exception:  # noqa: BLE001 - cookie ещё не загружена/уже отсутствует
+            pass
 
 
 def _read_refresh_cookie() -> str | None:
@@ -107,6 +127,10 @@ def _apply_session(ctx: Ctx, res: dict) -> None:
             # path="/" - чтобы кука уходила и на /grafana, /adminer и пр. (гейт панелей по forward-auth).
             _cookies.set(REFRESH_COOKIE, res["refresh_token"], max_age=_refresh_ttl(ctx),
                          same_site="strict", secure=_cookie_secure(ctx), path="/")
+            # gate-кука для панелей: нерротируемая, поэтому forward-auth не ловит гонок ротации refresh.
+            if res.get("gate_token"):
+                _cookies.set(GATE_COOKIE, res["gate_token"], max_age=_refresh_ttl(ctx),
+                             same_site="strict", secure=_cookie_secure(ctx), path="/")
         except Exception:  # noqa: BLE001 - стор cookie ещё не готов; сессия в памяти живёт
             pass
 

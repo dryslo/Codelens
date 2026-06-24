@@ -13,6 +13,7 @@ from src.auth.tokens import (
     decode_access,
     hash_refresh,
     make_access_token,
+    make_gate_token,
     make_refresh_token,
     new_jti,
 )
@@ -52,7 +53,10 @@ class AuthService:
         rt = make_refresh_token()
         self.refresh_tokens.create(new_jti(), user["id"], hash_refresh(rt),
                                    _utcnow() + timedelta(seconds=self.cfg.refresh_ttl))
-        return {"access_token": access, "refresh_token": rt, "token_type": "bearer", "user": pub}
+        # gate-токен для гейтинга панелей (forward-auth): нерротируемый, живёт как refresh.
+        gate = make_gate_token(self.cfg.secret, self.cfg.alg, user, self.cfg.refresh_ttl)
+        return {"access_token": access, "refresh_token": rt, "gate_token": gate,
+                "token_type": "bearer", "user": pub}
 
     # --- регистрация / логин паролем ---
     def register(self, login: str, password: str) -> dict:

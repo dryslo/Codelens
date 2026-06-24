@@ -11,6 +11,7 @@ from src.auth.repositories import (
 )
 from src.auth.router import router as auth_router
 from src.auth.service import AuthService
+from src.auth.tokens import decode_gate, make_access_token
 from src.persistence.cache import InProcessCache
 from src.persistence.db import init_db, make_session_factory
 
@@ -80,3 +81,46 @@ def test_forward_auth_user_401(tmp_path):
 
 def test_forward_auth_no_cookie_401(tmp_path):
     assert _client(_auth(tmp_path)).get("/auth/forward-auth").status_code == 401
+
+
+# ---------- gate-кука: нерротируемый путь для панелей ----------
+
+def test_login_issues_gate_token(tmp_path):
+    auth = _auth(tmp_path)
+    auth.ensure_admin("root", "pw")
+    res = auth.login_password("root", "pw")
+    claims = decode_gate(res["gate_token"], auth.cfg.secret, auth.cfg.alg)
+    assert claims and claims["role"] == "admin" and claims["login"] == "root"
+    # access-токен не принимается как gate (другой type)
+    acc, _ = make_access_token(auth.cfg.secret, auth.cfg.alg, {"id": "x", "role": "admin"}, 900)
+    assert decode_gate(acc, auth.cfg.secret, auth.cfg.alg) is None
+
+
+def test_forward_auth_via_gate_cookie_only(tmp_path):
+    auth = _auth(tmp_path)
+    auth.ensure_admin("root", "pw")
+    res = auth.login_password("root", "pw")
+    c = _client(auth)
+    c.cookies.set("codelens_gate", res["gate_token"])        # только gate, без refresh-куки
+    r = c.get("/auth/forward-auth")
+    assert r.status_code == 200 and r.headers["X-Auth-Role"] == "Admin"
+
+
+def test_forward_auth_gate_survives_refresh_rotation(tmp_path):
+    auth = _auth(tmp_path)
+    auth.ensure_admin("root", "pw")
+    res = auth.login_password("root", "pw")
+    auth.refresh(res["refresh_token"])                       # refresh отозван ротацией
+    c = _client(auth)
+    c.cookies.set("codelens_gate", res["gate_token"])
+    c.cookies.set("codelens_rt", res["refresh_token"])       # эта кука уже невалидна
+    assert c.get("/auth/forward-auth").status_code == 200    # gate спасает - панели не падают
+
+
+def test_forward_auth_user_gate_401(tmp_path):
+    auth = _auth(tmp_path)
+    auth.register("u", "pw")
+    res = auth.login_password("u", "pw")                     # role=user
+    c = _client(auth)
+    c.cookies.set("codelens_gate", res["gate_token"])
+    assert c.get("/auth/forward-auth").status_code == 401

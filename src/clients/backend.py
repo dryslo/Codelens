@@ -397,8 +397,8 @@ class HttpBackend(BackendClient):
             yield from parse_lines(r.iter_lines(decode_unicode=True))
 
     def stats(self) -> dict:
-        """Вернуть статистику индекса через backend."""
-        return self._get("/admin/stats")
+        """Вернуть статистику индекса через backend (require_user: и Поиск, и Админка)."""
+        return self._get("/index/stats")
 
     def index(self, folder: str, source: str, incremental: bool = True) -> dict:
         """Запустить индексацию папки через backend."""

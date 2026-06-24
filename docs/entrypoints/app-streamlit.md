@@ -88,6 +88,7 @@ class Ctx:
 
 - `Ctx` - единый контекст сессии, прокидывается во вкладки. Собирается из `Components` (composition root) - dataclass из [factory](../factory.md), а не словарь.
 - `_build_comp()` под `@st.cache_resource` строит composition root один раз на процесс. Без кэша на каждом нажатии тумблера заново поднимались бы e5-эмбеддер (~1 ГБ VRAM), BM25-индекс, открывался Chroma/Qdrant. Чистится явно через `st.cache_resource.clear()` после индексации/удаления источника.
+- `_session_backend(comp)` - для `role=frontend` создаёт **отдельный `HttpBackend` на сессию** (хранится в `st.session_state`), а не берёт общий из кэшированного `comp`. Иначе `HttpBackend.token` (Bearer) был бы один на процесс, и логин одного браузера перетирал бы токен у всех остальных. У `LocalBackend` (`role=all`) токена нет - возвращается общий инстанс.
 
 ### Cookie-персист и refresh
 
