@@ -13,7 +13,7 @@ session.ensure_authenticated(ctx)        # cookie-гейт и логин (st.sto
 session.load_policy(ctx)
 
 # Постоянная шапка: заголовок не привязан к разделу, виден на всех вкладках.
-st.markdown("## 🔍 CodeLens")
+st.markdown("## 🔍 CodeLens(какое-нибудь изменение)")
 st.caption("Умный поиск по кодовой базе")
 
 # Навигация - segmented_control, а не st.tabs: st.tabs держит панели всех вкладок в DOM и
