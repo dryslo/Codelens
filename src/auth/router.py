@@ -14,7 +14,6 @@ from fastapi.responses import RedirectResponse
 from src.auth import ratelimit
 from src.auth.deps import bearer_token, get_auth, get_current_user
 from src.auth.oidc import login_with_id_token
-from src.auth.tokens import decode_gate
 from src.auth.schemas import LoginReq, RefreshReq, RegisterReq
 from src.auth.service import AuthService
 
@@ -85,6 +84,21 @@ def refresh(request: Request, response: Response,
     return res
 
 
+@router.post("/session")
+def session(request: Request, response: Response,
+            r: RefreshReq | None = Body(default=None),
+            auth: AuthService = Depends(get_auth)) -> dict:
+    """Восстановить сессию по refresh без ротации (тот же refresh, новый access); из тела или cookie."""
+    token = (r.refresh_token if r else None) or request.cookies.get(auth.cfg.cookie_name)
+    if not token:
+        raise HTTPException(status_code=401, detail="missing refresh token")
+    res = auth.restore(token)
+    if "error" in res:
+        raise HTTPException(status_code=401, detail=res["error"])
+    _set_refresh_cookie(response, auth, res.get("refresh_token", ""))
+    return res
+
+
 @router.post("/oidc/{provider}")
 def oidc(provider: str, response: Response, id_token: str = Body(..., embed=True),
          auth: AuthService = Depends(get_auth)) -> dict:
@@ -121,23 +135,14 @@ def oidc_callback(provider: str, request: Request, credential: str = Form(defaul
     return redirect
 
 
-GATE_COOKIE = "codelens_gate"
-
-
 @router.get("/forward-auth")
 def forward_auth(request: Request, auth: AuthService = Depends(get_auth)) -> Response:
-    """auth_request для reverse-proxy: 200 если пользователь admin, иначе 401.
+    """auth_request для reverse-proxy: 200 если по refresh-куке пользователь admin, иначе 401.
 
-    Основной путь - нерротируемая gate-кука (подпись+роль+срок, без БД): устойчива к гонкам ротации
-    refresh, поэтому панели не ловят 401. Фоллбэк - read-only резолв refresh-куки (совместимость).
-    При 200 отдаём X-Auth-User/X-Auth-Role: nginx копирует их в запрос (auth_request_set), Grafana
-    через auth.proxy опознаёт пользователя - вместо безличного anonymous-admin. Тело пустое.
+    Источник доступа к внешним панелям - роль аккаунта в нашей БД (без IdP). При 200 отдаём
+    X-Auth-User/X-Auth-Role: nginx копирует их в проксируемый запрос (auth_request_set), а Grafana
+    через auth.proxy опознаёт пользователя по ним - вместо безличного anonymous-admin. Тело пустое.
     """
-    gate = request.cookies.get(GATE_COOKIE)
-    claims = decode_gate(gate, auth.cfg.secret, auth.cfg.alg) if gate else None
-    if claims and claims.get("role") == "admin":
-        return Response(status_code=200, headers={"X-Auth-User": claims.get("login") or "",
-                                                  "X-Auth-Role": "Admin"})
     user = auth.resolve_refresh(request.cookies.get(auth.cfg.cookie_name))
     if not (user and user.get("role") == "admin"):
         return Response(status_code=401)

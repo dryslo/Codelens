@@ -103,7 +103,7 @@ def _cc() -> CookieController:        # контроллер на сессию, 
 - `_cc()` создаёт `CookieController` **в рамках текущей сессии**, а не модульным глобалом. Контроллер кэширует куки в `self.__cookies` (привязан к `st.session_state[key]`); глобал создавался бы один раз на импорт (вне сессии), и его dict шарился бы между всеми браузерами - `set()` одного юзера протекал бы в `get()` другого (один вход на всех). Конструктор per-run привязывается к `st.session_state` своей сессии, после первого ранда берёт из неё без round-trip.
 - `_wait_for_cookies()` ждёт, пока cookie-компонент отдаст значения: до первого round-trip стор `None`, `set`/`get` падают, и логин не переживает F5. Ограничено пятью ранами, дальше работа без cookie.
 - `_apply_session()` сохраняет выданную пару: память, Bearer и cookie с refresh. Cookie ставится `SameSite=Strict` против CSRF; `Secure` - в prod (HTTPS), управляется `auth.cookie_secure`.
-- `ensure_authenticated()`: без авторизации - `anon`/`admin`. Иначе при отсутствии сессии читается refresh из cookie и обновляется (ротированный refresh переписывает cookie); протухший или отозванный - cookie удаляется и показывается экран входа.
+- `ensure_authenticated()`: без авторизации - `anon`/`admin`. Иначе при отсутствии сессии refresh читается из cookie (`_read_refresh_cookie()`: сперва `st.context.cookies`, затем JS-контроллер) и сессия восстанавливается через `restore` (`/auth/session`, без ротации - чтобы F5 не отзывал куку и вход не слетал); протухший или отозванный - cookie удаляется, показывается экран входа.
 - `auth is not None` (HTTP-режим, отдельный `AuthClient`) против fallback на методы backend - один и тот же контракт login/register/refresh/logout.
 
 ## Карточка результата `render_card` (`frontend/components.py`)

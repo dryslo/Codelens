@@ -17,18 +17,19 @@ if TYPE_CHECKING:
     from src.factory import Components
 
 REFRESH_COOKIE = "codelens_rt"
-GATE_COOKIE = "codelens_gate"      # нерротируемый токен для forward-auth панелей (см. src/auth/tokens.py)
 
 
 def _cc() -> CookieController:
-    """CookieController в рамках текущей сессии (а не на процесс).
+    """CookieController, кэшированный на сессию в st.session_state.
 
-    Контроллер кэширует куки в self.__cookies, привязанном к st.session_state[key]. Модульный глобал
-    создавался бы один раз на импорт (вне сессии) - его dict шарился бы между всеми браузерами, и
-    set() одного пользователя протекал бы в get() другого (один вход на всех). Конструктор per-run
-    привязывается к st.session_state текущей сессии; после первого ранда берёт из неё (без round-trip).
+    Один на сессию, а не на вызов: повторное создание в одном ране падает на записи в session_state
+    виджета. И не модульный глобал: тот шарил бы куки между сессиями (один вход на всех).
     """
-    return CookieController()
+    cc = st.session_state.get("_cc")
+    if cc is None:
+        cc = CookieController()
+        st.session_state["_cc"] = cc
+    return cc
 
 
 @dataclass
@@ -52,11 +53,10 @@ def _build_comp() -> Components:
 
 
 def _session_backend(comp: Components) -> object:
-    """Backend на каждую сессию (а не на процесс) - чтобы Bearer-токен не шарился между браузерами.
+    """HttpBackend на каждую сессию, чтобы Bearer-токен не шарился между браузерами.
 
-    comp кэширован @st.cache_resource (один на процесс), поэтому общий HttpBackend.token перетирался
-    бы при каждом логине и последний вход «выигрывал» для всех. У LocalBackend (role=all) токена нет
-    - возвращаем общий. HttpBackend лёгкий (только URL+token), создание на сессию дёшево.
+    comp кэширован на процесс, поэтому общий HttpBackend.token перетирался бы при каждом логине.
+    У LocalBackend (role=all) токена нет - возвращаем общий.
     """
     shared = comp.backend
     if not hasattr(shared, "token"):          # LocalBackend - общий ок
@@ -104,23 +104,22 @@ def _wait_for_cookies() -> None:
 
 
 def _remove_refresh_cookie() -> None:
-    cc = _cc()
-    for name in (REFRESH_COOKIE, GATE_COOKIE):
-        try:
-            cc.remove(name)
-        except Exception:  # noqa: BLE001 - cookie ещё не загружена/уже отсутствует
-            pass
+    try:
+        _cc().remove(REFRESH_COOKIE)
+    except Exception:  # noqa: BLE001 - cookie ещё не загружена/уже отсутствует
+        pass
 
 
 def _read_refresh_cookie() -> str | None:
-    try:
-        v = _cc().get(REFRESH_COOKIE)
-    except Exception:  # noqa: BLE001
-        v = None
+    # st.context.cookies (куки HTTP-запроса) надёжнее на F5, чем async JS-контроллер; читаем первым.
+    ctx_cookies = getattr(st.context, "cookies", None) or {}
+    v = ctx_cookies.get(REFRESH_COOKIE)
     if v:
         return v
-    ctx_cookies = getattr(st.context, "cookies", None) or {}
-    return ctx_cookies.get(REFRESH_COOKIE)
+    try:
+        return _cc().get(REFRESH_COOKIE)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _cookie_secure(ctx: Ctx) -> bool:
@@ -128,23 +127,31 @@ def _cookie_secure(ctx: Ctx) -> bool:
 
 
 def _apply_session(ctx: Ctx, res: dict) -> None:
-    """Сохраняет выданную пару токенов: память + Bearer + cookie (refresh)."""
+    """Сохраняет выданную пару токенов в память + Bearer. Cookie пишется на рендер-ране (см. ниже)."""
     st.session_state.auth = res
+    st.session_state.pop("_cookie_persisted", None)   # новая пара -> перезаписать cookie
     if hasattr(ctx.backend, "token"):
         ctx.backend.token = res["access_token"]
-    if res.get("refresh_token"):
-        try:
-            cc, secure = _cc(), _cookie_secure(ctx)
-            # SameSite=Strict (дефолт контроллера) против CSRF; Secure - в prod (HTTPS).
-            # path="/" - чтобы кука уходила и на /grafana, /adminer и пр. (гейт панелей по forward-auth).
-            cc.set(REFRESH_COOKIE, res["refresh_token"], max_age=_refresh_ttl(ctx),
-                   same_site="strict", secure=secure, path="/")
-            # gate-кука для панелей: нерротируемая, поэтому forward-auth не ловит гонок ротации refresh.
-            if res.get("gate_token"):
-                cc.set(GATE_COOKIE, res["gate_token"], max_age=_refresh_ttl(ctx),
-                       same_site="strict", secure=secure, path="/")
-        except Exception:  # noqa: BLE001 - стор cookie ещё не готов; сессия в памяти живёт
-            pass
+
+
+def _persist_refresh_cookie(ctx: Ctx) -> None:
+    """Записать refresh в браузерную cookie - один раз на сессию, на обычном рендер-ране.
+
+    Не в _apply_session: тот зовут перед st.rerun (логин), и компонент записи не успевает сфлашиться
+    в браузер до перезагрузки - cookie теряется, F5 сбрасывает сессию. На рендер-ране (без rerun)
+    компонент доезжает.
+    """
+    rt = (st.session_state.get("auth") or {}).get("refresh_token")
+    if not rt or st.session_state.get("_cookie_persisted"):
+        return
+    try:
+        # SameSite=Strict (дефолт контроллера) против CSRF; Secure - в prod (HTTPS).
+        # path="/" - чтобы кука уходила и на /grafana, /adminer и пр. (гейт панелей по forward-auth).
+        _cc().set(REFRESH_COOKIE, rt, max_age=_refresh_ttl(ctx),
+                  same_site="strict", secure=_cookie_secure(ctx), path="/")
+        st.session_state["_cookie_persisted"] = True
+    except Exception:  # noqa: BLE001 - стор cookie ещё не готов; повторим на следующем ране
+        pass
 
 
 def _clear_session(ctx: Ctx) -> None:
@@ -217,9 +224,10 @@ def ensure_authenticated(ctx: Ctx) -> None:
     if "auth" not in st.session_state:
         rt = _read_refresh_cookie()
         if rt:
-            res = ctx.auth.refresh(rt) if ctx.auth is not None else ctx.backend.refresh(rt)
+            # restore, а не refresh: восстановление по куке без ротации, иначе F5 отзывал бы токен.
+            res = ctx.auth.restore(rt) if ctx.auth is not None else ctx.backend.restore(rt)
             if res.get("access_token"):
-                _apply_session(ctx, res)        # cookie обновляется ротированным refresh
+                _apply_session(ctx, res)
             else:
                 _remove_refresh_cookie()        # протух или отозван
         if "auth" not in st.session_state:
@@ -229,6 +237,7 @@ def ensure_authenticated(ctx: Ctx) -> None:
     ctx.user_id, ctx.role = a["user"]["user_id"], a["user"]["role"]
     if hasattr(ctx.backend, "token"):
         ctx.backend.token = a["access_token"]
+    _persist_refresh_cookie(ctx)        # на рендер-ране, чтобы cookie доехала до браузера (для F5)
 
 
 def render_logout(ctx: Ctx) -> None:

@@ -318,8 +318,15 @@ class HttpBackend(BackendClient):
         return res
 
     def refresh(self, refresh_token: str) -> dict:
-        """Обновить access-токен по refresh-токену."""
+        """Обновить пару токенов по refresh-токену (с ротацией)."""
         res = self._post("/auth/refresh", {"refresh_token": refresh_token})
+        if res.get("access_token"):
+            self.token = res["access_token"]
+        return res
+
+    def restore(self, refresh_token: str) -> dict:
+        """Восстановить сессию по refresh без ротации: тот же refresh, новый access."""
+        res = self._post("/auth/session", {"refresh_token": refresh_token})
         if res.get("access_token"):
             self.token = res["access_token"]
         return res

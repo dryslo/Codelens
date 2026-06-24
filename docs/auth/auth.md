@@ -9,18 +9,17 @@
 | Токен | Где живёт | Срок | Назначение |
 |---|---|---|---|
 | access | JWT, серверная сессия по `jti` в кэше (`access:{jti}`) | короткий (`access_ttl`) | доступ к роутам; allow-list в кэше → отзыв сразу |
-| refresh | в БД (`refresh_tokens`), хранится только sha256-хэш | длинный (`refresh_ttl`) | обновление access; ротация при каждом `/refresh` |
-| gate | подписанный JWT (`type=gate`), без БД | = `refresh_ttl` | гейт панелей в forward-auth; нерротируемый, поэтому устойчив к гонкам ротации refresh ([forward-auth](#forward-auth-доступ-к-внешним-панелям)) |
+| refresh | в БД (`refresh_tokens`), хранится только sha256-хэш | длинный (`refresh_ttl`) | обновление access (`/refresh` с ротацией) и восстановление сессии (`/session` без ротации); гейт панелей в forward-auth |
 
 Проверка access: JWT декодируется (подпись+exp), затем сверяется `access:{jti}` в кэше - если записи
 нет (logout/expiry), доступ отклоняется.
 
 Refresh дополнительно кладётся в httpOnly+SameSite cookie (`cookie_name`, path `cookie_path`, по
-умолчанию `/`) - для браузера за single-origin reverse-proxy. `path=/` нужен, чтобы куки уходили и на
-`/grafana`/`/adminer` и пр.: гейтинг внешних панелей через `/auth/forward-auth` читает gate-куку (а в
-фоллбэке - refresh), обе на `path=/` (сузить путь - сломать гейт). Тело ответа с `refresh_token` (и
-`gate_token`) сохранено для Streamlit-посредника (`HttpBackend` ставит браузерные куки сам).
-`cookie_secure=true` нужен в prod (HTTPS), иначе браузер не сохранит Secure-cookie.
+умолчанию `/`) - для браузера за single-origin reverse-proxy. `path=/` нужен, чтобы кука уходила и на
+`/grafana`/`/adminer` и пр.: гейтинг внешних панелей через `/auth/forward-auth` читает именно её
+(сузить путь - сломать гейт). Тело ответа с `refresh_token` сохранено для Streamlit-посредника
+(`HttpBackend` ставит браузерную куку сам). `cookie_secure=true` нужен в prod (HTTPS), иначе браузер
+не сохранит Secure-cookie.
 
 ## Таблицы (persistence/orm.py)
 
@@ -41,15 +40,15 @@ Refresh дополнительно кладётся в httpOnly+SameSite cookie 
 | `passwords.py` | argon2id `hash_password`/`verify_password` |
 | `tokens.py` | access-JWT (`make_access_token`/`decode_access`), refresh (`make_refresh_token`/`hash_refresh`) |
 | `repositories.py` | `SqlUsers`/`SqlCredentials`/`SqlIdentities`/`SqlRefreshTokens` поверх ORM |
-| `service.py` | `AuthService`: register, login_password, login_oidc, refresh (ротация), logout, resolve_access, ensure_admin, list_users/set_role |
+| `service.py` | `AuthService`: register, login_password, login_oidc, refresh (ротация), restore (без ротации), logout, resolve_access, ensure_admin, list_users/set_role |
 | `oidc.py` | `verify_id_token` (JWKS провайдера) → `login_with_id_token` → `AuthService.login_oidc` |
 | `deps.py` | `get_current_user`, `require_user`/`require_admin` - общие зависимости на группы роутеров |
 | `ratelimit.py` | `allow` - fixed-window ограничитель частоты для login/register (счётчик в кэше) |
-| `router.py` | публичный `/auth/*`: register, login, refresh, oidc, oidc/{provider}/callback, forward-auth, me, logout |
+| `router.py` | публичный `/auth/*`: register, login, refresh, session, oidc, oidc/{provider}/callback, forward-auth, me, logout |
 
 ## Группировка роутов (backend_app.py)
 
-- **public** - `/auth/{register,login,refresh,oidc,oidc/{provider}/callback}`, `/healthz`, `/flag-policy`.
+- **public** - `/auth/{register,login,refresh,session,oidc,oidc/{provider}/callback}`, `/healthz`, `/flag-policy`.
 - **protected** - `APIRouter(dependencies=[Depends(require_user)])`: `/search`, `/chat`, `/chats`,
   `/llms`, `/answer` (+ `/auth/me`, `/auth/logout`). Чаты скоупятся по `current_user.user_id`.
 - **admin** (`src/admin/router.py`) - `APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])`:
@@ -62,20 +61,11 @@ Refresh дополнительно кладётся в httpOnly+SameSite cookie 
 
 ## forward-auth (доступ к внешним панелям)
 
-`/auth/forward-auth` - `auth_request` для reverse-proxy: 200, если пользователь имеет роль `admin`,
-иначе 401. При 200 отдаются `X-Auth-User`/`X-Auth-Role`: nginx копирует их в проксируемый запрос, а
-Grafana через `auth.proxy` опознаёт пользователя по ним.
-
-Основной путь - **gate-кука** `codelens_gate`: подписанный JWT (`type=gate`, claims `role`/`login`,
-срок = `refresh_ttl`), проверяется только подписью+сроком, без БД (`tokens.decode_gate`). Она отдельна
-от refresh именно потому, что refresh **ротируется**: фронт миррорит refresh-куку в браузер JS-
-контроллером, а на частых Streamlit-rerun (F5, вторая вкладка) браузер остаётся со старым, уже
-отозванным токеном - и read-only-резолв refresh давал бы 401. Gate не ротируется, поэтому слегка
-устаревшая копия в браузере всё равно валидна. Снимается при logout (фронт удаляет куку).
-
-Фоллбэк (совместимость) - read-only резолв refresh-куки (`resolve_refresh`, без ротации): роль берётся
-из аккаунта в БД. `gate_token` выдаётся в теле login/refresh/oidc-ответа рядом с `access`/`refresh`
-(`AuthService._issue`); фронт кладёт его в куку `codelens_gate` так же, как refresh.
+`/auth/forward-auth` - `auth_request` для reverse-proxy: 200, если по refresh-куке пользователь имеет
+роль `admin`, иначе 401. Источник доступа - роль аккаунта в БД (без IdP). При 200 отдаются
+`X-Auth-User`/`X-Auth-Role`: nginx копирует их в проксируемый запрос, а Grafana через `auth.proxy`
+опознаёт пользователя по ним. Refresh резолвится read-only (`resolve_refresh`, без ротации); кука
+стабильна, т.к. восстановление сессии идёт через `restore` без ротации.
 
 ## OIDC (Google + точка расширения)
 
