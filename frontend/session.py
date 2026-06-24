@@ -104,7 +104,7 @@ def _apply_session(ctx: Ctx, res: dict) -> None:
     if res.get("refresh_token"):
         try:
             # SameSite=Strict (дефолт контроллера) против CSRF; Secure - в prod (HTTPS).
-            # path="/" - чтобы кука уходила и на /grafana, /pgadmin и пр. (гейт панелей по forward-auth).
+            # path="/" - чтобы кука уходила и на /grafana, /adminer и пр. (гейт панелей по forward-auth).
             _cookies.set(REFRESH_COOKIE, res["refresh_token"], max_age=_refresh_ttl(ctx),
                          same_site="strict", secure=_cookie_secure(ctx), path="/")
         except Exception:  # noqa: BLE001 - стор cookie ещё не готов; сессия в памяти живёт
@@ -119,26 +119,32 @@ def _clear_session(ctx: Ctx) -> None:
 
 
 def _google_signin(ctx: Ctx) -> None:
-    """Кнопка «Войти через Google» (GIS, ux_mode=redirect). Видна, если задан clientId.
+    """Ссылка «Войти через Google». Видна, если задан clientId.
 
-    Google постит credential на backend login_uri (/auth/oidc/google/callback); тот верифицирует
-    id_token, ставит refresh-куку и редиректит на /. <base target="_top"> уводит сабмит формы из
-    component-iframe в верхнее окно, иначе callback открылся бы внутри фрейма. Сессию фронт
+    Не GIS-виджет: тот живёт в sandboxed iframe Streamlit без allow-top-navigation, поэтому не может
+    увести верхнее окно на Google. Вместо него - обычная ссылка верхнего уровня на OAuth-эндпоинт
+    (`response_type=id_token`, `response_mode=form_post`). Google form_post'ит id_token на backend
+    login_uri (`/auth/oidc/google/callback`), тот ставит refresh-куку и редиректит на /; сессию фронт
     подхватывает по куке (как при F5).
     """
     g = ((ctx.cfg.get("auth") or {}).get("oidc") or {}).get("google") or {}
     cid, uri = g.get("clientId"), g.get("login_uri")
     if not cid or not uri:
         return
-    import streamlit.components.v1 as components
+    import secrets
+    import urllib.parse
+    params = urllib.parse.urlencode({
+        "client_id": cid,
+        "redirect_uri": uri,
+        "response_type": "id_token",
+        "scope": "openid email profile",
+        "response_mode": "form_post",
+        "nonce": secrets.token_urlsafe(16),   # Google требует nonce для id_token-потока
+        "prompt": "select_account",
+    })
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + params
     st.divider()
-    components.html(
-        f'<base target="_top">'
-        f'<script src="https://accounts.google.com/gsi/client" async></script>'
-        f'<div id="g_id_onload" data-client_id="{cid}" data-login_uri="{uri}" data-ux_mode="redirect"></div>'
-        f'<div class="g_id_signin" data-type="standard" data-text="signin_with" data-shape="pill"></div>',
-        height=80,
-    )
+    st.link_button("Войти через Google", auth_url, use_container_width=True)
 
 
 def _login_screen(ctx: Ctx) -> None:

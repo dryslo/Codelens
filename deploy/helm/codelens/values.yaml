@@ -187,17 +187,14 @@ ingress:
   tls: false              # true -> spec.tls на ingress.host, секрет <full>-tls (заполняет cert-manager)
   annotations: {}
 
-# --- Администрирование БД (pgAdmin + дашборд Qdrant за forward-auth). По умолчанию выкл. ---
-# Доступ гейтит role=admin в БД через /auth/forward-auth (как Grafana), отдельным dbadmin-ingress
-# с auth-аннотациями ingress-nginx. Учётка pgAdmin - в секрете (secrets.pgadmin*). Требует
-# одного host с приложением (cookie path=/ на том же домене). Для traefik (k3s) - Middleware forwardAuth.
+# --- Администрирование БД (Adminer за forward-auth). По умолчанию выкл. ---
+# Доступ гейтит role=admin в БД через /auth/forward-auth (как Grafana) на /adminer того же host.
+# Adminer stateless (своего аккаунта нет, подключение на форме входа). traefik -> Middleware
+# forwardAuth+stripPrefix; nginx -> auth-аннотации. См. dbadmin-ingress.yaml / adminer.yaml.
 dbadmin:
   enabled: false
-  image: dpage/pgadmin4:8.14
-  storage: 1Gi
-  storageClass: ""
+  image: adminer:4.8.1
   resources: {}
-  qdrant: true            # добавить путь /qdrant к дашборду Qdrant за тем же гейтом (см. caveat в доке)
   nodeSelector: {}        # на k3s со staging-узлом: { codelens.io/env: staging }
   tolerations: []
 

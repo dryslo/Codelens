@@ -89,9 +89,9 @@ llm:
 # Генерация: deploy/gitops/sealed/seal.sh staging. Подробно - deploy/gitops/sealed/README.md.
 secrets:
   create: false
-# БД-панель pgAdmin за forward-auth (role=admin) на staging.codelens.fun/pgadmin.
+# БД-панель Adminer за forward-auth (role=admin) на staging.codelens.fun/adminer.
 # qdrant=false: дашборд Qdrant под субпутём ломается (см. dbadmin-ingress), для демо не нужен.
-# Своего логина у pgAdmin нет (desktop-режим), единственный гейт - forward-auth; секрет не нужен.
+# Своего логина у Adminer нет (desktop-режим), единственный гейт - forward-auth; секрет не нужен.
 dbadmin:
   enabled: true
   qdrant: false

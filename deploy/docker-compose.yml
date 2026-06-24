@@ -92,29 +92,22 @@ services:
   redis:
     image: redis:7
   # Внешние панели за forward-auth (профиль panels). Запуск: docker compose --profile panels up.
-  # Всё в одном origin через nginx: приложение на http://localhost; Grafana на /grafana, pgAdmin на
-  # /pgadmin, дашборд Qdrant на http://localhost:8081 - открываются только для role=admin
+  # Всё в одном origin через nginx: приложение на http://localhost; Grafana на /grafana, Adminer на
+  # /adminer, дашборд Qdrant на http://localhost:8081 - открываются только для role=admin
   # (проверка - /auth/forward-auth по refresh-куке).
   nginx:
     image: nginx:1.27-alpine
     profiles: ["panels"]
     volumes: ["./nginx/nginx.conf:/etc/nginx/nginx.conf:ro"]
     ports: ["80:80", "8081:8081"]      # 80 - приложение+панели; 8081 - дашборд Qdrant (свой origin)
-    depends_on: [frontend, backend, grafana, pgadmin, qdrant]
-  # Администрирование Postgres. За nginx /pgadmin (forward-auth, role=admin - единственный гейт).
-  # SERVER_MODE=False -> desktop-режим: без собственного логина pgAdmin (двойная авторизация не нужна,
-  # доступ уже решает forward-auth). DEFAULT_EMAIL/PASSWORD в этом режиме для входа не используются.
-  pgadmin:
-    image: dpage/pgadmin4:8.14
+    depends_on: [frontend, backend, grafana, adminer, qdrant]
+  # Администрирование Postgres - Adminer (один файл, stateless). За nginx /adminer (forward-auth,
+  # role=admin - единственный гейт). Своего логина нет: подключение к БД задаётся на форме входа.
+  adminer:
+    image: adminer:4.8.1
     profiles: ["panels"]
     environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@codelens.com}     # требуется entrypoint'у, для входа не нужен
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
-      PGADMIN_CONFIG_SERVER_MODE: "False"               # без логина pgAdmin (гейтит forward-auth)
-      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"  # не спрашивать мастер-пароль за сохранённые подключения
-      PGADMIN_CONFIG_PROXY_X_HOST_COUNT: "1"            # доверяем заголовкам от единственного прокси - nginx
-      PGADMIN_CONFIG_PROXY_X_PREFIX_COUNT: "1"
-    volumes: ["pgadmin_data:/var/lib/pgadmin"]
+      ADMINER_DEFAULT_SERVER: postgres   # предзаполнить хост БД (имя сервиса compose)
     depends_on: [postgres]
   grafana:
     image: grafana/grafana:11.2.0
@@ -143,5 +136,4 @@ services:
 volumes:
   qdrant_data: {}
   pg_data: {}
-  pgadmin_data: {}   # стейт pgAdmin (сохранённые соединения/настройки)
   model_cache: {}    # кэш скачанных моделей embedder/reranker (вместо предзагрузки в образ)

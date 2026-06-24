@@ -2,13 +2,13 @@
 {{- $full := include "codelens.fullname" . -}}
 {{- $ns := .Release.Namespace -}}
 {{- $authUrl := printf "http://%s-backend.%s.svc.cluster.local:%v/auth/forward-auth" $full $ns .Values.backend.port -}}
-# Гейт админ-панелей: forward-auth (role=admin в БД) перед pgAdmin (и опц. дашбордом Qdrant).
-# Тот же host, что приложение (refresh-кука path=/ на одном домене). Две реализации по ingress.className:
-# traefik (overlay k3s) - Middleware forwardAuth + stripPrefix; nginx - external-auth аннотации.
+# Гейт админ-панели Adminer: forward-auth (role=admin в БД) на том же host, что приложение
+# (refresh-кука path=/ host-only). Две реализации по ingress.className: traefik (overlay k3s) и nginx.
+# Adminer работает по относительным URL, поэтому хватает stripPrefix - без X-Script-Name/headers.
+# ВАЖНО: forwardAuth.address - FQDN сервиса backend. Traefik живёт в kube-system и короткое имя
+# (codelens-backend) резолвил бы в своём namespace -> "no such host".
 {{- if eq .Values.ingress.className "traefik" }}
 # ---------- Traefik ----------
-# Цепочка middleware на /pgadmin: forwardAuth (гейт) -> headers (X-Script-Name=/pgadmin для генерации
-# ссылок pgAdmin) -> stripPrefix (снять /pgadmin перед проксированием). Порядок важен.
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -17,7 +17,7 @@ metadata:
     {{- include "codelens.labels" . | nindent 4 }}
 spec:
   forwardAuth:
-    address: {{ printf "http://%s-backend:%v/auth/forward-auth" $full .Values.backend.port | quote }}
+    address: {{ $authUrl | quote }}
     authResponseHeaders:
       - X-Auth-User
       - X-Auth-Role
@@ -25,101 +25,49 @@ spec:
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
-  name: {{ $full }}-pgadmin-headers
-  labels:
-    {{- include "codelens.labels" . | nindent 4 }}
-spec:
-  headers:
-    customRequestHeaders:
-      X-Script-Name: /pgadmin
----
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: {{ $full }}-pgadmin-strip
+  name: {{ $full }}-adminer-strip
   labels:
     {{- include "codelens.labels" . | nindent 4 }}
 spec:
   stripPrefix:
     prefixes:
-      - /pgadmin
+      - /adminer
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ $full }}-pgadmin
+  name: {{ $full }}-adminer
   labels:
     {{- include "codelens.labels" . | nindent 4 }}
-    app.kubernetes.io/component: pgadmin
+    app.kubernetes.io/component: adminer
   annotations:
-    # forwardAuth -> headers -> stripPrefix (в этом порядке)
-    traefik.ingress.kubernetes.io/router.middlewares: "{{ $ns }}-{{ $full }}-forward-auth@kubernetescrd,{{ $ns }}-{{ $full }}-pgadmin-headers@kubernetescrd,{{ $ns }}-{{ $full }}-pgadmin-strip@kubernetescrd"
+    traefik.ingress.kubernetes.io/router.middlewares: "{{ $ns }}-{{ $full }}-forward-auth@kubernetescrd,{{ $ns }}-{{ $full }}-adminer-strip@kubernetescrd"
 spec:
   ingressClassName: traefik
   rules:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
-          - path: /pgadmin
+          - path: /adminer
             pathType: Prefix
             backend:
               service:
-                name: {{ $full }}-pgadmin
+                name: {{ $full }}-adminer
                 port: { number: 80 }
-{{- if .Values.dbadmin.qdrant }}
----
-# CAVEAT: UI Qdrant ходит в API по корне-относительным путям (/collections, /cluster) - под субпутём
-# /qdrant часть запросов уйдёт мимо. На субдомен refresh-кука (host-only) не дойдёт. Для демо qdrant
-# держим выключенным; этот блок - на случай dbadmin.qdrant=true (нужна доводка под живой кластер).
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: {{ $full }}-qdrant-strip
-  labels:
-    {{- include "codelens.labels" . | nindent 4 }}
-spec:
-  stripPrefix:
-    prefixes:
-      - /qdrant
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ $full }}-qdrant-dashboard
-  labels:
-    {{- include "codelens.labels" . | nindent 4 }}
-    app.kubernetes.io/component: qdrant
-  annotations:
-    traefik.ingress.kubernetes.io/router.middlewares: "{{ $ns }}-{{ $full }}-forward-auth@kubernetescrd,{{ $ns }}-{{ $full }}-qdrant-strip@kubernetescrd"
-spec:
-  ingressClassName: traefik
-  rules:
-    - host: {{ .Values.ingress.host | quote }}
-      http:
-        paths:
-          - path: /qdrant
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ $full }}-qdrant
-                port: { number: 6333 }
-{{- end }}
 {{- else }}
 # ---------- ingress-nginx ----------
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ $full }}-pgadmin
+  name: {{ $full }}-adminer
   labels:
     {{- include "codelens.labels" . | nindent 4 }}
-    app.kubernetes.io/component: pgadmin
+    app.kubernetes.io/component: adminer
   annotations:
     nginx.ingress.kubernetes.io/auth-url: {{ $authUrl | quote }}
     nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-User,X-Auth-Role"
     nginx.ingress.kubernetes.io/auth-signin: {{ printf "https://%s/" .Values.ingress.host | quote }}
     nginx.ingress.kubernetes.io/rewrite-target: /$2
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      proxy_set_header X-Script-Name /pgadmin;
 spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className }}
@@ -128,40 +76,11 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
-          - path: /pgadmin(/|$)(.*)
+          - path: /adminer(/|$)(.*)
             pathType: ImplementationSpecific
             backend:
               service:
-                name: {{ $full }}-pgadmin
+                name: {{ $full }}-adminer
                 port: { number: 80 }
-{{- if .Values.dbadmin.qdrant }}
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ $full }}-qdrant-dashboard
-  labels:
-    {{- include "codelens.labels" . | nindent 4 }}
-    app.kubernetes.io/component: qdrant
-  annotations:
-    nginx.ingress.kubernetes.io/auth-url: {{ $authUrl | quote }}
-    nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-User,X-Auth-Role"
-    nginx.ingress.kubernetes.io/auth-signin: {{ printf "https://%s/" .Values.ingress.host | quote }}
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
-spec:
-  {{- if .Values.ingress.className }}
-  ingressClassName: {{ .Values.ingress.className }}
-  {{- end }}
-  rules:
-    - host: {{ .Values.ingress.host | quote }}
-      http:
-        paths:
-          - path: /qdrant(/|$)(.*)
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: {{ $full }}-qdrant
-                port: { number: 6333 }
-{{- end }}
 {{- end }}
 {{- end }}

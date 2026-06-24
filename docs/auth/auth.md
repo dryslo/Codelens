@@ -16,7 +16,7 @@
 
 Refresh дополнительно кладётся в httpOnly+SameSite cookie (`cookie_name`, path `cookie_path`, по
 умолчанию `/`) - для браузера за single-origin reverse-proxy. `path=/` нужен, чтобы кука уходила и на
-`/grafana`/`/pgadmin` и пр.: гейтинг внешних панелей через `/auth/forward-auth` читает именно её
+`/grafana`/`/adminer` и пр.: гейтинг внешних панелей через `/auth/forward-auth` читает именно её
 (сузить путь - сломать гейт). Тело ответа с `refresh_token` сохранено для совместимости (Streamlit,
 `HttpBackend`). `cookie_secure=true` нужен в prod (HTTPS), иначе браузер не сохранит Secure-cookie.
 
@@ -72,21 +72,24 @@ Refresh дополнительно кладётся в httpOnly+SameSite cookie 
 `AuthService.login_oidc(provider, subject, claims)` находит/создаёт пользователя через identities
 и выдаёт access+refresh. Новые провайдеры добавляются конфигом, без правок кода.
 
-**Google** доведён до рабочего входа. Из-за iframe-ограничений Streamlit фронт не передаёт токен в
-Python напрямую, а используется поток Google Identity Services `ux_mode=redirect`:
+**Google** доведён до рабочего входа. Streamlit рендерит компоненты в sandboxed iframe без
+`allow-top-navigation`, поэтому GIS-виджет верхнее окно увести не может - используется обычная
+ссылка верхнего уровня на OAuth-эндпоинт (`response_type=id_token`, `response_mode=form_post`):
 
-1. На экране входа - кнопка GIS (рендерится, если задан `auth.oidc.google.clientId`). `<base
-   target="_top">` уводит сабмит формы из component-iframe в верхнее окно.
-2. Google постит `credential` (id_token) на `login_uri` =
+1. На экране входа - `st.link_button` (рендерится, если задан `auth.oidc.google.clientId`), ведёт на
+   `accounts.google.com/o/oauth2/v2/auth?...&redirect_uri=<login_uri>&nonce=...`.
+2. Клик уводит вкладку на выбор аккаунта; Google form_post'ит `id_token` на `login_uri` =
    `https://<host>/auth/oidc/google/callback`.
-3. `/auth/oidc/{provider}/callback` проверяет CSRF (double-submit cookie `g_csrf_token`),
-   верифицирует id_token тем же `login_with_id_token`, ставит refresh-куку и редиректит на `/`.
+3. `/auth/oidc/{provider}/callback` принимает поле `id_token` (или `credential` от GIS) - CSRF
+   (`g_csrf_token`) проверяется, только если пришёл; верифицирует токен тем же `login_with_id_token`,
+   ставит refresh-куку и редиректит на `/`.
 4. Фронт подхватывает сессию по куке (как при F5).
 
 Конфиг рендерится из `config.oidc.google.clientId` (публичен): `audience`/`jwks_url`/`issuer` читает
 бэкенд, `clientId`/`login_uri` - фронт. `clientId` пуст → кнопка скрыта. В `ingress` нужен
-`authPath: true`, чтобы `/auth/*` (с callback) проксировался на backend. GitHub - не OIDC (нет
-id_token/JWKS), потребовал бы отдельного OAuth2 code-flow.
+`authPath: true`, чтобы `/auth/*` (с callback) проксировался на backend. В Google-клиенте `<host>` +
+`<host>/auth/oidc/google/callback` должны быть в Authorized origins/redirect URIs. GitHub - не OIDC
+(нет id_token/JWKS), потребовал бы отдельного OAuth2 code-flow.
 
 ## Где собирается
 

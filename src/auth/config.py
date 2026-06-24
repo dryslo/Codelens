@@ -17,7 +17,7 @@ class AuthConfig:
     cookie_secure: bool = False    # true в prod (HTTPS); иначе браузер не сохранит Secure-cookie
     cookie_samesite: str = "lax"   # lax | strict | none
     cookie_path: str = "/"         # scope куки. "/" нужен, чтобы forward-auth видел её и на /grafana,
-                                   # /pgadmin и пр. (гейт панелей по refresh-куке); сузить ломает гейт
+                                   # /adminer и пр. (гейт панелей по refresh-куке); сузить ломает гейт
     rate_limit_attempts: int = 10  # попыток login/register на IP за окно (0 - выключено)
     rate_limit_window: int = 60    # окно ограничителя частоты, сек
 

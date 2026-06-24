@@ -1,4 +1,4 @@
-# Argo CD UI за Traefik forward-auth (role=admin) - тем же гейтом, что Grafana/pgAdmin.
+# Argo CD UI за Traefik forward-auth (role=admin) - тем же гейтом, что Grafana/Adminer.
 # Свой логин Argo выключается (server.disable.auth), TLS терминирует Traefik (server.insecure),
 # UI под субпутём /argocd (server.rootpath). Команды-предусловия - в deploy/k3s-setup.md (раздел Argo UI):
 #   kubectl -n argocd patch cm argocd-cmd-params-cm --type merge \

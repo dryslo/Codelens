@@ -28,7 +28,7 @@ redis:
   enabled: true        # одиночный (кэш + очередь RQ); не реплицируется - допустимо
   nodeSelector: { codelens.io/pool: data }   # держим на data-узлах, прочь от node-dev (staging)
 
-# pgAdmin за forward-auth (role=admin) на codelens.fun/pgadmin. На data-узлах (нет node-dev в prod).
+# Adminer за forward-auth (role=admin) на codelens.fun/adminer. На data-узлах (нет node-dev в prod).
 # qdrant=false - дашборд Qdrant под субпутём не работает (см. dbadmin-ingress).
 dbadmin:
   enabled: true

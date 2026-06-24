@@ -17,8 +17,8 @@
 | [configmap.yaml](../../../../deploy/helm/codelens/templates/configmap.yaml) | всегда | `config.yaml` из `values.config` → ConfigMap; монтируется во все поды |
 | [secret.yaml](../../../../deploy/helm/codelens/templates/secret.yaml) | `secrets.create=true` | Opaque-Secret с DSN/JWT/ключами провайдеров (локалка; в GitOps - sealed-secrets) |
 | [ingress.yaml](../../../../deploy/helm/codelens/templates/ingress.yaml) | `ingress.enabled` | маршрутизация host → `/api`, `/auth` на backend, `/` на frontend |
-| [pgadmin.yaml](../../../../deploy/helm/codelens/templates/pgadmin.yaml) | `dbadmin.enabled` | админ-панель Postgres: PVC + Deployment + Service (доступ гейтит dbadmin-ingress) |
-| [dbadmin-ingress.yaml](../../../../deploy/helm/codelens/templates/dbadmin-ingress.yaml) | `dbadmin.enabled` + `ingress.enabled` | два Ingress (pgAdmin + дашборд Qdrant) за forward-auth `role=admin` |
+| [adminer.yaml](../../../../deploy/helm/codelens/templates/adminer.yaml) | `dbadmin.enabled` | админ-панель БД Adminer: Deployment + Service (stateless; доступ гейтит dbadmin-ingress) |
+| [dbadmin-ingress.yaml](../../../../deploy/helm/codelens/templates/dbadmin-ingress.yaml) | `dbadmin.enabled` + `ingress.enabled` | Ingress на `/adminer` за forward-auth `role=admin` |
 | [migrate-job.yaml](../../../../deploy/helm/codelens/templates/migrate-job.yaml) | всегда | pre-install/upgrade hook: `alembic upgrade head` |
 | [index-job.yaml](../../../../deploy/helm/codelens/templates/index-job.yaml) | `indexJob.enabled` | post-install/upgrade hook: индексация корпуса |
 | [servicemonitor.yaml](../../../../deploy/helm/codelens/templates/servicemonitor.yaml) | `monitoring.enabled` | скрейп `/metrics` Service'ов с лейблом `codelens.io/scrape=true` |
@@ -92,8 +92,8 @@ stringData:
   `auth` в [`config.yaml`](../../../../config/config.yaml)).
 - `HF_TOKEN` - токен Hugging Face для загрузки моделей embedder/reranker.
 
-Учётки pgAdmin в секрете нет: панель в desktop-режиме без логина, email/пароль задаются прямо в
-[pgadmin.yaml](#pgadminyaml---админ-панель-postgres-за-forward-auth) плейн-env (для входа не нужны).
+Учётки панели БД в секрете нет: Adminer stateless, своего логина не имеет (вход - форма подключения
+к БД), см. [adminer.yaml](#admineryaml---админ-панель-бд-за-forward-auth).
 
 Имена ключей - контракт: они должны совпадать с `${VAR}` в ConfigMap и с `api_key_env` провайдеров,
 иначе подстановка в подах даст пустое значение.
@@ -133,78 +133,59 @@ paths:
 
 Аналог для docker-compose (тот же раскрой на reverse-proxy) - в [../../nginx.md](../../nginx.md).
 
-## pgadmin.yaml - админ-панель Postgres за forward-auth
+## adminer.yaml - админ-панель БД за forward-auth
 
-Под `{{- if .Values.dbadmin.enabled -}}` (по умолчанию выключено). Один манифест разворачивает
-pgAdmin 4 тремя объектами: PVC + Deployment + Service. Внешнего доступа сам по себе не даёт - его
-гейтит [dbadmin-ingress.yaml](#dbadmin-ingressyaml---гейт-ingress-админ-панелей); Service висит
-только внутри кластера.
+Под `{{- if .Values.dbadmin.enabled -}}` (по умолчанию выключено). Deployment + Service с Adminer -
+лёгкой однофайловой веб-админкой. Stateless: ни PVC, ни своего аккаунта; подключение задаётся на
+форме входа (`ADMINER_DEFAULT_SERVER` предзаполняет хост `<full>-pg-rw`). Внешнего доступа сам по себе
+не даёт - его гейтит [dbadmin-ingress.yaml](#dbadmin-ingressyaml---гейт-ingress-админ-панели); Service
+висит только внутри кластера.
 
 ```yaml
-spec:
-  securityContext:
-    fsGroup: 5050             # uid/gid pgadmin - чтобы PVC был доступен на запись
-  containers:
-    - name: pgadmin
-      image: {{ .Values.dbadmin.image }}
-      env:
-        - { name: PGADMIN_CONFIG_SERVER_MODE, value: "False" }            # desktop-режим: без логина pgAdmin
-        - { name: PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED, value: "False" }
-        - { name: PGADMIN_CONFIG_PROXY_X_HOST_COUNT, value: "1" }
-        - { name: PGADMIN_CONFIG_PROXY_X_PREFIX_COUNT, value: "1" }
-        - { name: PGADMIN_DEFAULT_EMAIL, value: "admin@codelens.com" }      # должен быть валидным, иначе старт падает
-        - { name: PGADMIN_DEFAULT_PASSWORD, value: "desktop-mode-no-login" }  # заглушка: в desktop-режиме не для входа
-      readinessProbe:
-        tcpSocket: { port: 80 }
+containers:
+  - name: adminer
+    image: {{ .Values.dbadmin.image }}       # adminer:4.x, слушает :8080
+    env:
+      - { name: ADMINER_DEFAULT_SERVER, value: <full>-pg-rw }
+    readinessProbe:
+      tcpSocket: { port: 8080 }
 ```
 
-- **PVC** (`dbadmin.storage`/`storageClass`) держит учётку pgAdmin и сохранённые подключения -
-  состояние, переживающее рестарт пода.
-- **fsGroup: 5050** - uid/gid пользователя контейнера pgAdmin; без него смонтированный PVC окажется
-  недоступен на запись, и панель не стартует.
-- **Без логина pgAdmin** (`SERVER_MODE=False`, desktop-режим): второй формы входа нет, гейт один -
-  `role=admin` через ingress forward-auth. `PGADMIN_DEFAULT_EMAIL`/`PGADMIN_DEFAULT_PASSWORD` заданы
-  плейн-env (в секрете их нет): email обязан быть валидным, иначе entrypoint падает, пароль - заглушка.
-- **Префикс задаёт ingress, не env**: pgAdmin узнаёт о субпути `/pgadmin` из заголовка `X-Script-Name`,
-  который проставляет ingress, а не из `SCRIPT_NAME`-env. Иначе при `rewrite-target` префикс
-  навесился бы дважды. `PROXY_X_*=1` велит доверять `X-Forwarded-*`/`X-Script-Name` ровно от одного
-  прокси (ingress-controller).
-- **readiness - tcpSocket:80**, а не `httpGet`: HTTP-путь зависит от `X-Script-Name`, которого у
-  пробы нет, поэтому проверяется только TCP-готовность порта.
+Adminer работает по относительным URL, поэтому за субпутём `/adminer` ему достаточно `stripPrefix`
+на ingress: отдельный заголовок-префикс не нужен. Своего логина у панели нет: вход - это форма
+подключения к БД (creds `codelens/codelens`),
+а единственный гейт доступа снаружи - `role=admin` через forward-auth.
 
-## dbadmin-ingress.yaml - гейт-Ingress админ-панелей
+## dbadmin-ingress.yaml - гейт-Ingress админ-панели
 
-Под `{{- if and .Values.dbadmin.enabled .Values.ingress.enabled -}}`. Ставит панель на тот же host,
+Под `{{- if and .Values.dbadmin.enabled .Values.ingress.enabled -}}`. Ставит Adminer на тот же host,
 что приложение, за гейтом forward-auth. Тот же host обязателен: forward-auth опирается на
 refresh-cookie `path=/` приложения, а она host-only и до субдомена/другого хоста не доходит. Шаблон
 ветвится по `ingress.className`: **traefik** (overlay k3s, основной путь) и **nginx**.
 
-**Traefik** - цепочка из трёх `Middleware` на путь `/pgadmin`:
+**Traefik** - две `Middleware` на путь `/adminer`:
 
 ```yaml
 forwardAuth:                       # гейт role=admin
-  address: http://<full>-backend:<port>/auth/forward-auth
+  address: http://<full>-backend.<ns>.svc.cluster.local:<port>/auth/forward-auth   # FQDN обязателен
   authResponseHeaders: [X-Auth-User, X-Auth-Role]
 ---
-headers: { customRequestHeaders: { X-Script-Name: /pgadmin } }   # pgAdmin строит ссылки с префиксом
----
-stripPrefix: { prefixes: [/pgadmin] }                            # снять /pgadmin перед проксированием
+stripPrefix: { prefixes: [/adminer] }                            # снять /adminer перед проксированием
 ```
 
-Ingress навешивает их аннотацией в порядке `forwardAuth → headers → stripPrefix`:
-`traefik.ingress.kubernetes.io/router.middlewares: "<ns>-<full>-forward-auth@kubernetescrd,<ns>-<full>-pgadmin-headers@kubernetescrd,<ns>-<full>-pgadmin-strip@kubernetescrd"`.
-`forwardAuth` пускает только при `role=admin` в БД (как доступ к Grafana), иначе `401`; `stripPrefix`
-заменяет `rewrite-target` из nginx, а `X-Script-Name` возвращает pgAdmin его субпуть.
+Ingress навешивает их аннотацией в порядке `forwardAuth → stripPrefix`:
+`traefik.ingress.kubernetes.io/router.middlewares: "<ns>-<full>-forward-auth@kubernetescrd,<ns>-<full>-adminer-strip@kubernetescrd"`.
+**FQDN в `forwardAuth.address` критичен**: Traefik работает в namespace `kube-system` и короткое имя
+`<full>-backend` резолвил бы у себя (`no such host`). `forwardAuth` пускает только при `role=admin` в
+БД (как доступ к Grafana), иначе `401`.
 
 **nginx** (ветка `else`) - тот же гейт через external-auth: `auth-url` → `/auth/forward-auth`,
-`auth-signin` редиректит не-admin на `https://<host>/`, `rewrite-target: /$2` срезает префикс,
-`configuration-snippet` ставит `X-Script-Name /pgadmin`.
+`auth-signin` редиректит не-admin на `https://<host>/`, путь `/adminer(/|$)(.*)` + `rewrite-target: /$2`
+срезает префикс.
 
-- **Qdrant-дашборд** (под `dbadmin.qdrant`, по умолчанию выключен): путь `/qdrant` → Service
-  `<full>-qdrant:6333` за тем же гейтом. **Caveat**: UI Qdrant ходит в API по корне-относительным
-  путям (`/collections`, `/cluster`), поэтому под субпутём часть запросов уходит мимо, а на субдомен
-  не дойдёт кука. Для живого кластера - port-forward к `:6333/dashboard` либо отдельный host с
-  собственной авторизацией (basicAuth).
+Дашборд Qdrant сюда не выносится: его UI ходит в API по корне-относительным путям (`/collections`,
+`/cluster`) - под субпутём ломается, а на субдомен не дойдёт кука. Для разового доступа - port-forward
+к `:6333/dashboard`.
 
 ## migrate-job.yaml - миграции схемы Argo Sync-хуком
 

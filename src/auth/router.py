@@ -96,19 +96,23 @@ def oidc(provider: str, response: Response, id_token: str = Body(..., embed=True
 
 
 @router.post("/oidc/{provider}/callback")
-def oidc_callback(provider: str, request: Request, credential: str = Form(...),
-                  g_csrf_token: str = Form(default=""),
+def oidc_callback(provider: str, request: Request, credential: str = Form(default=""),
+                  id_token: str = Form(default=""), g_csrf_token: str = Form(default=""),
                   auth: AuthService = Depends(get_auth)) -> Response:
-    """Принять GIS-callback (ux_mode=redirect): по credential выдать сессию и увести на фронт.
+    """Принять form_post с id_token от Google: выдать сессию и увести на фронт.
 
-    Браузер постит сюда credential (id_token) и g_csrf_token. Проверяем CSRF (double-submit cookie),
-    логиним по id_token, ставим refresh-cookie и редиректим на корень фронта - дальше сессию
-    подхватывает фронт по куке (как при F5).
+    Google (response_type=id_token, response_mode=form_post) постит сюда токен полем `id_token`;
+    GIS-поток присылал бы его как `credential` + `g_csrf_token` - поддержаны оба. Логиним по токену,
+    ставим refresh-cookie и редиректим на корень фронта; сессию подхватывает фронт по куке (как при F5).
     """
-    cookie_csrf = request.cookies.get("g_csrf_token")
-    if not cookie_csrf or cookie_csrf != g_csrf_token:
-        raise HTTPException(status_code=400, detail="oidc csrf check failed")
-    res = login_with_id_token(auth, provider, credential)
+    token = credential or id_token
+    if not token:
+        raise HTTPException(status_code=400, detail="oidc callback without token")
+    if g_csrf_token:  # GIS-поток: проверяем double-submit cookie. Плейн-OAuth CSRF-поле не шлёт.
+        cookie_csrf = request.cookies.get("g_csrf_token")
+        if not cookie_csrf or cookie_csrf != g_csrf_token:
+            raise HTTPException(status_code=400, detail="oidc csrf check failed")
+    res = login_with_id_token(auth, provider, token)
     if "error" in res:
         raise HTTPException(status_code=401, detail=res["error"])
     redirect = RedirectResponse(url="/", status_code=303)

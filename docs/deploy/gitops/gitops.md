@@ -119,7 +119,7 @@ kube-state-metrics) один раз на кластер в namespace `monitoring
 
 ## Grafana и Argo CD UI за forward-auth
 
-Обе панели открываются по тому же гейту `role=admin`, что pgAdmin (Traefik `Middleware` типа
+Обе панели открываются по тому же гейту `role=admin`, что Adminer (Traefik `Middleware` типа
 `forwardAuth` на `/auth/forward-auth` backend'а), и на том же host, что приложение - иначе host-only
 refresh-кука до них не дойдёт.
 

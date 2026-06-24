@@ -23,7 +23,7 @@ Ingest идёт не в backend, а через очередь RQ (`JOBS_KIND=red
 | postgres | `postgres:16` | - | (всегда) | `pg_data` | реляционка (refresh-токены, реестр, чаты) |
 | redis | `redis:7` | - | (всегда) | - | кэш + очередь RQ |
 | nginx | `nginx:1.27-alpine` | 80:80, 8081:8081 | `panels` | `nginx.conf` (ro) | single-origin reverse-proxy + forward-auth (80 - приложение+панели, 8081 - дашборд Qdrant) |
-| pgadmin | `dpage/pgadmin4:8.14` | - | `panels` | `pgadmin_data` | админка Postgres за forward-auth (`/pgadmin`) |
+| adminer | `adminer:4.8.1` | - | `panels` | - | админка Postgres за forward-auth (`/adminer`) |
 | grafana | `grafana/grafana:11.2.0` | - | `panels` | provisioning + dashboards (ro) | панели за forward-auth (`/grafana`) |
 | prometheus | `prom/prometheus:v2.54.1` | - | `panels` | `prometheus.yml` (ro) | сбор метрик |
 
@@ -221,7 +221,7 @@ redis:
   восстанавливается, а очередь - рабочий поток).
 - Учётные данные Postgres (`codelens`/`codelens`/`codelens`) совпадают с `DATABASE_DSN` в anchor.
 
-## nginx, pgadmin, grafana, prometheus (профиль panels)
+## nginx, adminer, grafana, prometheus (профиль panels)
 
 ```yaml
 nginx:
@@ -229,44 +229,35 @@ nginx:
   profiles: ["panels"]
   volumes: ["./nginx/nginx.conf:/etc/nginx/nginx.conf:ro"]
   ports: ["80:80", "8081:8081"]      # 80 - приложение+панели; 8081 - дашборд Qdrant (свой origin)
-  depends_on: [frontend, backend, grafana, pgadmin, qdrant]
+  depends_on: [frontend, backend, grafana, adminer, qdrant]
 ```
 
 - Профиль `panels` (`docker compose --profile panels up`) добавляет за reverse-proxy три
   административные панели. Всё сводится в один origin `http://localhost`: приложение на `/`, Grafana
-  на `/grafana`, pgAdmin на `/pgadmin`. Дашборд Qdrant вынесен на отдельный порт `http://localhost:8081`
+  на `/grafana`, Adminer на `/adminer`. Дашборд Qdrant вынесен на отдельный порт `http://localhost:8081`
   (его UI ходит в API по корне-относительным путям, под субпуть не годится - разбор в
   [./nginx.md](./nginx.md)). Доступ к каждой панели гейтит nginx через forward-auth - подзапрос на
   `/auth/forward-auth`, который проверяет refresh-куку и пропускает только `role=admin`.
-- nginx публикует два порта: `80` (приложение + Grafana + pgAdmin) и `8081` (отдельный origin
-  дашборда Qdrant). `depends_on` ждёт запуска `pgadmin` и `qdrant` - оба за гейтом nginx.
+- nginx публикует два порта: `80` (приложение + Grafana + Adminer) и `8081` (отдельный origin
+  дашборда Qdrant). `depends_on` ждёт запуска `adminer` и `qdrant` - оба за гейтом nginx.
 
 ```yaml
-pgadmin:
-  image: dpage/pgadmin4:8.14
+adminer:
+  image: adminer:4.8.1
   profiles: ["panels"]
   environment:
-    PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@codelens.com}     # нужен entrypoint'у, для входа не используется
-    PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
-    PGADMIN_CONFIG_SERVER_MODE: "False"               # desktop-режим: без логина pgAdmin
-    PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"  # не спрашивать мастер-пароль
-    PGADMIN_CONFIG_PROXY_X_HOST_COUNT: "1"            # доверяем заголовкам единственного прокси - nginx
-    PGADMIN_CONFIG_PROXY_X_PREFIX_COUNT: "1"
-  volumes: ["pgadmin_data:/var/lib/pgadmin"]
+    ADMINER_DEFAULT_SERVER: postgres   # предзаполнить хост БД (имя сервиса compose)
   depends_on: [postgres]
 ```
 
-- Веб-админка Postgres за nginx `/pgadmin` (forward-auth, `role=admin`). Прямого порта наружу нет -
-  единственный вход через прокси.
-- `SERVER_MODE=False` (desktop-режим) - **без собственного логина pgAdmin**: доступ уже гейтит
-  forward-auth по `role=admin`, второй вход избыточен. `MASTER_PASSWORD_REQUIRED=False` убирает запрос
-  мастер-пароля за сохранённые подключения. `PGADMIN_DEFAULT_*` в этом режиме для входа не нужны
-  (требуются лишь entrypoint'у), переопределяются `PGADMIN_EMAIL`/`PGADMIN_PASSWORD` в `.env`.
-- `PGADMIN_CONFIG_PROXY_X_HOST_COUNT`/`X_PREFIX_COUNT=1` - pgAdmin доверяет `X-Forwarded-*` и
-  `X-Script-Name` от единственного прокси (nginx), чтобы строить ссылки с префиксом `/pgadmin`
+- Веб-админка Postgres - Adminer (один PHP-файл) за nginx `/adminer` (forward-auth, `role=admin`).
+  Прямого порта наружу нет - единственный вход через прокси.
+- **Без собственного логина-аккаунта**: вход в Adminer - это форма подключения к БД (System,
+  Server, User, Password), а доступ к самой панели уже гейтит forward-auth по `role=admin`.
+  `ADMINER_DEFAULT_SERVER` лишь предзаполняет хост (`postgres`); креды - `codelens`/`codelens`.
+- **Stateless**: ни тома, ни env-секретов. Adminer работает по относительным URL, поэтому за
+  субпутём `/adminer` ему не нужен `X-Script-Name` - префикс снимает `proxy_pass` в nginx
   (разбор location - [./nginx.md](./nginx.md)).
-- Том `pgadmin_data` (`/var/lib/pgadmin`) хранит стейт панели: сохранённые соединения и настройки
-  переживают пересоздание контейнера.
 
 ```yaml
 grafana:
@@ -311,13 +302,11 @@ prometheus:
 volumes:
   qdrant_data: {}
   pg_data: {}
-  pgadmin_data: {}   # стейт pgAdmin (сохранённые соединения/настройки)
   model_cache: {}
 ```
 
 - `qdrant_data` - хранилище векторов Qdrant (`/qdrant/storage`).
 - `pg_data` - данные Postgres (`/var/lib/postgresql/data`).
-- `pgadmin_data` - стейт pgAdmin (`/var/lib/pgadmin`): сохранённые соединения и настройки панели.
 - `model_cache` - кэш скачанных весов embedder/reranker (`/app/cache/models`). Вместо предзагрузки
   моделей в образ они качаются на старте и переживают пересоздание пода в этом томе. Общий между
   `embedder` и `reranker`.

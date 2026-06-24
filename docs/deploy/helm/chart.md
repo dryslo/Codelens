@@ -227,8 +227,6 @@ secrets:
   groqApiKey: ""
   adminLogin: admin
   adminPassword: ""
-  pgadminEmail: admin@codelens.com   # учётка pgAdmin; нужна при dbadmin.enabled
-  pgadminPassword: ""                  # задать при dbadmin.enabled (в prod - sealed-secrets)
 ```
 
 `create: true` (база/local) - чарт сам создаёт Secret `<fullname>-secrets` из этих полей. В
@@ -256,19 +254,17 @@ monitoring:
 
 ```yaml
 dbadmin:
-  enabled: false         # тумблер админ-панелей БД (pgAdmin + дашборд Qdrant за forward-auth)
-  image: dpage/pgadmin4:8.14
-  storage: 1Gi           # PVC pgAdmin (учётка + сохранённые подключения)
-  storageClass: ""
+  enabled: false         # тумблер админ-панели БД (Adminer за forward-auth на /adminer)
+  image: adminer:4.8.1
   resources: {}
-  qdrant: true           # добавить путь /qdrant к дашборду Qdrant за тем же гейтом (см. caveat)
+  nodeSelector: {}       # на k3s: { codelens.io/env: staging } | { codelens.io/pool: data }
+  tolerations: []
 ```
 
-Один тумблер на обе админ-панели. `enabled: true` рендерит pgAdmin (PVC+Deployment+Service) и
-dbadmin-ingress, который гейтит доступ через `/auth/forward-auth` (`role=admin` в БД, как у
-Grafana). Учётку самого pgAdmin даёт Secret - поля `secrets.pgadminEmail`/`secrets.pgadminPassword`
-(→ ключи `PGADMIN_DEFAULT_EMAIL`/`PGADMIN_DEFAULT_PASSWORD`); пароль нужно задать при включении (в
-prod - через sealed-secrets, не в values).
+`enabled: true` рендерит Adminer (Deployment+Service) и dbadmin-ingress, который гейтит доступ через
+`/auth/forward-auth` (`role=admin` в БД, как у Grafana). Adminer stateless: ни PVC, ни своего
+аккаунта - подключение к БД задаётся на форме входа (хост предзаполнен `ADMINER_DEFAULT_SERVER`),
+секрета панели нет.
 
 Требование: панели висят на **том же host**, что приложение. forward-auth опирается на
 refresh-cookie `path=/` приложения, а такая cookie прикладывается только в пределах своего домена -

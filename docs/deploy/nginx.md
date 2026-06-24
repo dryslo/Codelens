@@ -2,11 +2,11 @@
 
 Разбор [`../../deploy/nginx/nginx.conf`](../../deploy/nginx/nginx.conf): обвязка профиля `panels`,
 которая ставит приложение и админ-панели под один домен и гейтит доступ к каждой по роли `admin`
-через forward-auth. Под гейтом три панели: Grafana (`/grafana`), pgAdmin (`/pgadmin`) и дашборд
+через forward-auth. Под гейтом три панели: Grafana (`/grafana`), Adminer (`/adminer`) и дашборд
 Qdrant (отдельный origin `http://localhost:8081`).
 
 Профиль `panels` поднимается отдельно (`docker compose --profile panels up`), разбор сервисного
-блока - в [`./docker-compose.md`](./docker-compose.md#nginx-pgadmin-grafana-prometheus-профиль-panels).
+блока - в [`./docker-compose.md`](./docker-compose.md#nginx-adminer-grafana-prometheus-профиль-panels).
 
 ## Зачем один origin
 
@@ -16,7 +16,7 @@ single-origin reverse-proxy видит только один домен (`http:/
 
 Это требование refresh-куки, а не косметика. Refresh-токен лежит в httpOnly+SameSite cookie с
 `path=/` (разбор - [`../auth/auth.md`](../auth/auth.md#токены)). `path=/` обязателен: при `path=/auth`
-кука не ушла бы на `/grafana` или `/pgadmin`, и forward-auth увидел бы пусто. Плюс приложение и
+кука не ушла бы на `/grafana` или `/adminer`, и forward-auth увидел бы пусто. Плюс приложение и
 панели должны жить под одним доменом, иначе кука теряется на cross-origin запросе. Развести их на
 поддомены - значит сломать гейтинг.
 
@@ -24,7 +24,7 @@ single-origin reverse-proxy видит только один домен (`http:/
 upstream frontend { server frontend:8501; }
 upstream backend  { server backend:8080; }
 upstream grafana  { server grafana:3000; }
-upstream pgadmin  { server pgadmin:80; }
+upstream adminer  { server adminer:8080; }
 upstream qdrant   { server qdrant:6333; }
 
 server {
@@ -32,14 +32,14 @@ server {
 ```
 
 Пять upstream'ов по docker-DNS-именам сервисов compose. Основной `server` слушает порт 80
-(приложение + Grafana + pgAdmin); дашборд Qdrant вынесен в отдельный `server` на `8081` (см. ниже).
+(приложение + Grafana + Adminer); дашборд Qdrant вынесен в отдельный `server` на `8081` (см. ниже).
 Порт-разводка тут не нарушает single-origin: cookie не привязана к порту, поэтому refresh-кука
 уходит и на `:8081` того же хоста.
 
 ## Location-блоки
 
 Маршрутизация - по префиксу пути, от частного к общему: `/auth_check` (внутренний),
-`/grafana/`, `/pgadmin/`, `/api/`, `/` (catch-all).
+`/grafana/`, `/adminer/`, `/api/`, `/` (catch-all).
 
 ### Приложение (`/`)
 
@@ -96,32 +96,27 @@ location /grafana/ {
 Каждый запрос к панелям сперва проходит `auth_request` (см. ниже). Подробности гейтинга и проброса
 идентичности - в следующих разделах.
 
-### pgAdmin за forward-auth (`/pgadmin/`)
+### Adminer за forward-auth (`/adminer/`)
 
 ```nginx
-location = /pgadmin { return 302 /pgadmin/; }
-location /pgadmin/ {
+location = /adminer { return 302 /adminer/; }
+location /adminer/ {
   auth_request /auth_check;
   error_page 401 403 = @login;
-  proxy_set_header X-Script-Name /pgadmin;
-  proxy_set_header X-Scheme $scheme;
   proxy_set_header Host $host;
-  proxy_pass http://pgadmin/;
+  proxy_pass http://adminer/;
 }
 ```
 
-Тот же гейт `auth_request`/`@login`, что и у Grafana: до pgAdmin доходит только запрос с
-admin-сессией. Отличие - в подгонке под субпуть:
+Тот же гейт `auth_request`/`@login`, что и у Grafana: до Adminer доходит только запрос с
+admin-сессией. Подгонка под субпуть простая: Adminer строит все ссылки
+относительными, поэтому `X-Script-Name` не нужен - префикс снимает trailing slash в
+`proxy_pass http://adminer/` (`/adminer/?server=...` → `adminer/?server=...`), а относительные
+ссылки в выдаче остаются под `/adminer`.
 
-- `proxy_pass http://pgadmin/` (с trailing slash) снимает префикс `/pgadmin` перед проксированием:
-  `/pgadmin/browser` → `pgadmin/browser`.
-- `X-Script-Name /pgadmin` возвращает префикс обратно для генерации ссылок. pgAdmin читает этот
-  заголовок (включён `PROXY_X_PREFIX_COUNT=1` в его env) и строит абсолютные ссылки/редиректы уже
-  с `/pgadmin`, чтобы они резолвились через прокси. `X-Scheme` - исходная схема для тех же ссылок.
-
-Идентичность в pgAdmin не пробрасывается, но и второй формы входа нет: pgAdmin поднят в
-desktop-режиме (`PGADMIN_CONFIG_SERVER_MODE=False`), без собственного логина. Единственный гейт -
-forward-auth по `role=admin`; пройдя его, пользователь сразу попадает в панель.
+Своего логина у панели нет: вход в Adminer - это форма подключения к БД (System/Server/User/
+Password), а единственный гейт доступа - forward-auth по `role=admin`. Пройдя его, пользователь
+сразу видит форму подключения.
 
 ## auth_request → /auth/forward-auth
 
@@ -180,7 +175,7 @@ Grafana поднята с `auth.proxy` (`GF_AUTH_PROXY_ENABLED=true`, загол
 
 ## Дашборд Qdrant на отдельном origin (`:8081`)
 
-Grafana и pgAdmin живут под субпутём (`/grafana`, `/pgadmin`), а UI Qdrant - нет. Его дашборд ходит
+Grafana и Adminer живут под субпутём (`/grafana`, `/adminer`), а UI Qdrant - нет. Его дашборд ходит
 в API по корне-относительным путям (`/collections`, `/cluster`), которые префикс не учитывают:
 под субпуть `/qdrant/` такие запросы ушли бы мимо. Поэтому дашборд вынесен на отдельный порт/origin,
 где живёт в корне.
@@ -219,8 +214,8 @@ server {
 
 ## См. также
 
-- [`./docker-compose.md`](./docker-compose.md#nginx-pgadmin-grafana-prometheus-профиль-panels) -
-  сервисный блок профиля `panels` (env Grafana/pgAdmin, тома).
+- [`./docker-compose.md`](./docker-compose.md#nginx-adminer-grafana-prometheus-профиль-panels) -
+  сервисный блок профиля `panels` (Grafana, Adminer).
 - [`../auth/auth.md`](../auth/auth.md#forward-auth-доступ-к-внешним-панелям) - forward-auth и
   refresh-кука.
 - [`./observability-stack.md`](./observability-stack.md) - что показывает Grafana за этим прокси.
