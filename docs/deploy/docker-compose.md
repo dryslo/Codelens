@@ -78,8 +78,10 @@ frontend:
 - Тонкий Streamlit-клиент. Своего ML/БД не держит, ходит в backend по `BACKEND_URL`. Единственная
   точка входа для пользователя на `:8501` (или `http://localhost` через nginx в профиле `panels`).
 - `PANEL_*_URL` наполняют блок «Дашборды» в Админке (`cfg.ui.panels`). По умолчанию пусты - в `make up`
-  панелей нет. Для профиля `panels`: `PANEL_GRAFANA_URL=/grafana PANEL_ADMINER_URL=/adminer
-  PANEL_QDRANT_URL=http://localhost:8081/dashboard docker compose --profile panels up`.
+  панелей нет. Для профиля `panels`: `PANEL_GRAFANA_URL=/grafana PANEL_ADMINER_URL=/adminer/
+  PANEL_QDRANT_URL=http://localhost:8081/dashboard docker compose --profile panels up`. Adminer - со
+  слешем (`/adminer/`): его сессионная кука scoped на `path=/adminer/`, без слеша браузер сидит на
+  `/adminer?...` и кука не уходит - логин зацикливается.
 - `depends_on: [backend]` - условие по умолчанию `service_started` (контейнер запущен, без проверки
   готовности).
 
