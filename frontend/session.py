@@ -18,7 +18,17 @@ if TYPE_CHECKING:
 
 REFRESH_COOKIE = "codelens_rt"
 GATE_COOKIE = "codelens_gate"      # нерротируемый токен для forward-auth панелей (см. src/auth/tokens.py)
-_cookies = CookieController()
+
+
+def _cc() -> CookieController:
+    """CookieController в рамках текущей сессии (а не на процесс).
+
+    Контроллер кэширует куки в self.__cookies, привязанном к st.session_state[key]. Модульный глобал
+    создавался бы один раз на импорт (вне сессии) - его dict шарился бы между всеми браузерами, и
+    set() одного пользователя протекал бы в get() другого (один вход на всех). Конструктор per-run
+    привязывается к st.session_state текущей сессии; после первого ранда берёт из неё (без round-trip).
+    """
+    return CookieController()
 
 
 @dataclass
@@ -84,7 +94,7 @@ def _wait_for_cookies() -> None:
     Иначе set/get падают на None-сторе, а логин не переживает F5.
     """
     try:
-        loaded = _cookies.getAll()
+        loaded = _cc().getAll()
     except Exception:  # noqa: BLE001
         loaded = None
     if loaded is None and st.session_state.get("_cookie_waits", 0) < 5:
@@ -94,16 +104,17 @@ def _wait_for_cookies() -> None:
 
 
 def _remove_refresh_cookie() -> None:
+    cc = _cc()
     for name in (REFRESH_COOKIE, GATE_COOKIE):
         try:
-            _cookies.remove(name)
+            cc.remove(name)
         except Exception:  # noqa: BLE001 - cookie ещё не загружена/уже отсутствует
             pass
 
 
 def _read_refresh_cookie() -> str | None:
     try:
-        v = _cookies.get(REFRESH_COOKIE)
+        v = _cc().get(REFRESH_COOKIE)
     except Exception:  # noqa: BLE001
         v = None
     if v:
@@ -123,14 +134,15 @@ def _apply_session(ctx: Ctx, res: dict) -> None:
         ctx.backend.token = res["access_token"]
     if res.get("refresh_token"):
         try:
+            cc, secure = _cc(), _cookie_secure(ctx)
             # SameSite=Strict (дефолт контроллера) против CSRF; Secure - в prod (HTTPS).
             # path="/" - чтобы кука уходила и на /grafana, /adminer и пр. (гейт панелей по forward-auth).
-            _cookies.set(REFRESH_COOKIE, res["refresh_token"], max_age=_refresh_ttl(ctx),
-                         same_site="strict", secure=_cookie_secure(ctx), path="/")
+            cc.set(REFRESH_COOKIE, res["refresh_token"], max_age=_refresh_ttl(ctx),
+                   same_site="strict", secure=secure, path="/")
             # gate-кука для панелей: нерротируемая, поэтому forward-auth не ловит гонок ротации refresh.
             if res.get("gate_token"):
-                _cookies.set(GATE_COOKIE, res["gate_token"], max_age=_refresh_ttl(ctx),
-                             same_site="strict", secure=_cookie_secure(ctx), path="/")
+                cc.set(GATE_COOKIE, res["gate_token"], max_age=_refresh_ttl(ctx),
+                       same_site="strict", secure=secure, path="/")
         except Exception:  # noqa: BLE001 - стор cookie ещё не готов; сессия в памяти живёт
             pass
 
