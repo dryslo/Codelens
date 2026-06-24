@@ -62,21 +62,31 @@ def job_view(job: Any) -> dict:
 
 
 def redis_conn(url: str) -> Any:
-    """Redis-соединение с агрессивным TCP keepalive.
+    """Redis-соединение для воркера, устойчивое к разрыву idle-BLPOP в сетевом оверлее.
 
-    RQ-воркер блокируется на пустой очереди (BLPOP); в WSL2/Docker idle-соединение режется за
-    секунды, и воркер выходит с 'Redis connection timeout'. Системный keepalive стартует только
-    через ~2 часа, поэтому задаём опции: первый пинг через 3с простоя, дальше каждые 2с.
+    RQ-воркер блокируется на пустой очереди (BLPOP); в WSL2/Docker и в оверлее k8s (Flannel/VXLAN)
+    idle-соединение режется, и воркер выходит с 'Redis connection timeout'. Два слоя защиты:
+      - TCP keepalive держит соединение живым (системный стартует только через ~2ч): пинг через 3с
+        простоя, дальше каждые 2с;
+      - Retry переподключается, если разрыв всё же случился, вместо падения воркера.
+    health_check_interval сознательно не задаём: на блокирующем BLPOP он даёт ложный таймаут.
     """
     import socket
 
     from redis import Redis
+    from redis.backoff import ExponentialBackoff
+    from redis.exceptions import ConnectionError as RedisConnError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+    from redis.retry import Retry
+
     opts = {}
     for name, val in (("TCP_KEEPIDLE", 3), ("TCP_KEEPINTVL", 2), ("TCP_KEEPCNT", 3)):
         if hasattr(socket, name):
             opts[getattr(socket, name)] = val
-    return Redis.from_url(url, socket_keepalive=True,
-                          socket_keepalive_options=opts or None, health_check_interval=30)
+    return Redis.from_url(
+        url, socket_keepalive=True, socket_keepalive_options=opts or None,
+        retry=Retry(ExponentialBackoff(cap=10, base=0.5), retries=20),
+        retry_on_error=[RedisConnError, RedisTimeoutError])
 
 
 class RedisQueue(JobQueue):
