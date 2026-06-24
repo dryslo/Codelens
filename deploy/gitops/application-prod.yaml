@@ -1,5 +1,5 @@
-# Argo CD Application - prod. Едет за веткой main. Промоушн в прод = merge dev -> main:
-# CI собирает образы, бампит image.tag в values-prod.yaml, Argo синхронизирует.
+# Argo CD Application - prod. Едет за веткой main. Промоушн в прод = PR dev -> main, в котором
+# image.tag в values-prod.yaml ставится = staging-тег (тот же проверенный образ). Argo синхронизирует.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

@@ -1,9 +1,11 @@
 # Overlay PROD (ветка main). Накладывается поверх values.yaml.
-# image.tag правит CI (job bump-tag) при push в main, вручную не редактируется.
+# Промоушн: main защищён (push только через PR), поэтому CI прод не бампает. В PR dev->main ставим
+# image.tag = текущий тег из values-staging.yaml - тот же образ, что уже собран и проверен на staging.
+# Синхронизировать перед открытием PR: yq -i ".image.tag = \"$(yq .image.tag values-staging.yaml)\"" values-prod.yaml
 fullnameOverride: codelens
 
 image:
-  tag: latest                  # перезаписывается CI на git-SHA
+  tag: 2373be756b4e848192cac85d1d2d8d71a304a4ea   # = staging-тег; меняется вручную при промоушне
 
 ingress:
   host: codelens.fun

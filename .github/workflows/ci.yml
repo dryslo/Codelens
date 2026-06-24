@@ -54,12 +54,13 @@ jobs:
           done
 
   # Сборка и публикация образов в GHCR. Тег = git-SHA (иммутабельный, требуется для GitOps).
-  # Деплой-джобы (build-push, bump-tag) спят, пока нет кластера: включаются repo-переменной
-  # DEPLOY_ENABLED=true (GitHub → Settings → Secrets and variables → Actions → Variables).
-  # До этого push в main/dev гоняет только quality + helm-validate, образы в GHCR не публикуются.
+  # Только на dev: prod катит уже протестированный на staging образ (промоушн см. ниже), своих образов
+  # main не собирает. Деплой-джобы спят, пока нет кластера: включаются repo-переменной DEPLOY_ENABLED=true
+  # (GitHub → Settings → Secrets and variables → Actions → Variables). До этого push гоняет только
+  # quality + helm-validate, образы в GHCR не публикуются.
   build-push:
     needs: [quality, helm-validate]   # деплой только если И тесты, И чарт валидны
-    if: github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -84,33 +85,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Деплой выполняется не здесь: image.tag бампится в overlay и коммитится, что синхронизирует Argo CD.
-  # dev -> values-staging.yaml, main -> values-prod.yaml.
+  # Деплой выполняется не здесь: image.tag бампится в values-staging.yaml и коммитится, что
+  # синхронизирует Argo CD. Только dev/staging: main защищён (push лишь через PR), поэтому prod-тег
+  # ставится вручную в PR dev->main = тот же протестированный staging-образ (см. deploy/gitops/README.md).
   bump-tag:
-    needs: build-push
+    needs: build-push                 # build-push сам только на dev -> bump-tag тоже
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Select env overlay
-        id: env
-        run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            echo "file=deploy/helm/codelens/values-prod.yaml"    >> "$GITHUB_OUTPUT"
-            echo "name=prod"    >> "$GITHUB_OUTPUT"
-          else
-            echo "file=deploy/helm/codelens/values-staging.yaml" >> "$GITHUB_OUTPUT"
-            echo "name=staging" >> "$GITHUB_OUTPUT"
-          fi
       - name: Bump image.tag to ${{ github.sha }}
-        run: yq -i '.image.tag = "${{ github.sha }}"' "${{ steps.env.outputs.file }}"
+        run: yq -i '.image.tag = "${{ github.sha }}"' deploy/helm/codelens/values-staging.yaml
       - name: Commit and push
         run: |
           git config user.name  "codelens-ci"
           git config user.email "ci@codelens.local"
-          git add "${{ steps.env.outputs.file }}"
+          git add deploy/helm/codelens/values-staging.yaml
           # [skip ci] - чтобы этот коммит не запускал workflow повторно (бесконечный цикл).
-          git commit -m "ci(${{ steps.env.outputs.name }}): bump image.tag ${GITHUB_SHA::12} [skip ci]" \
+          git commit -m "ci(staging): bump image.tag ${GITHUB_SHA::12} [skip ci]" \
             || { echo "image.tag не изменился - нечего коммитить"; exit 0; }
           git push

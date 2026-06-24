@@ -4,9 +4,9 @@ Git - единственный источник правды. Ручной push 
 кластера, каждые ~3 минуты сравнивает git с реальным состоянием и приводит кластер к git.
 
 ```
-git push ─► CI: тесты ─► сборка образов ─► push GHCR ─► bump image.tag в values-<env>.yaml (git commit)
+push dev ─► CI: тесты ─► сборка образов ─► push GHCR ─► bump image.tag в values-staging.yaml (git commit)
                                                                           │
-                                                          Argo CD (pull) ◄┘ синхронизирует кластер
+                                                          Argo CD (pull) ◄┘ синхронизирует staging
 ```
 
 | Окружение | Ветка | Overlay | Namespace | Application |
@@ -14,7 +14,17 @@ git push ─► CI: тесты ─► сборка образов ─► push GH
 | staging   | `dev`  | `values-staging.yaml` | `codelens-staging` | `application-staging.yaml` |
 | prod      | `main` | `values-prod.yaml`    | `codelens-prod`    | `application-prod.yaml` |
 
-Промоушн в прод = merge `dev -> main`.
+CI бампает тег только на `dev` (staging): `main` защищён (push лишь через PR), туда CI коммитить не может.
+
+**Промоушн в прод** = PR `dev -> main`, и в этом PR `values-prod.yaml` `image.tag` ставится равным
+текущему тегу из `values-staging.yaml` - тот же образ, что собран и проверен на staging (не пересобираем):
+
+```bash
+cd deploy/helm/codelens
+yq -i ".image.tag = \"$(yq .image.tag values-staging.yaml)\"" values-prod.yaml
+git add values-prod.yaml && git commit -m "promote: image.tag -> staging"
+# затем PR dev -> main; после merge Argo раскатывает prod
+```
 
 ## Предпосылки
 - Установлен **Argo CD** (`kubectl create ns argocd && kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml`).
