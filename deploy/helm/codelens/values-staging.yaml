@@ -22,6 +22,11 @@ config:
   oidc:
     google:
       clientId: "657334521650-f06agmbiql4mj5adn1u5ffr3lolvk1pq.apps.googleusercontent.com"
+  # Дашборды в Админке: subpath того же хоста (staging.codelens.fun) за forward-auth.
+  panels:
+    Grafana: /grafana
+    Adminer: /adminer
+    Argo CD: /argocd
 ingress:
   className: traefik # тот же k3s, что и prod (по умолчанию traefik); база ставит nginx
   host: staging.codelens.fun

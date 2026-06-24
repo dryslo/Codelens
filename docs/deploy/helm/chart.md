@@ -146,7 +146,8 @@ image:
 | `retrieval.flags` | режимы техник ретривера (`bm25`/`multiquery`/`hyde`/`rerank`/`mmr`): `off`/`ui`/`thinking`/`fast`. |
 | `llm` | `kind: remote` (backend/ретривер ходят в llm-gateway), провайдеры и `fast`-модель. |
 | `jobs` | `kind: redis` - ingest исполняет worker-под (RQ); в small/dev было бы `inprocess`. |
-| `auth` | включён, TTL access/refresh-токенов. |
+| `auth` | включён, TTL access/refresh-токенов; `oidc.google.clientId` - Web client_id (пусто → кнопка Google-входа скрыта). |
+| `ui.panels` | `{Подпись: URL}` ссылок на дашборды в Админке (`config.panels`, per-overlay): staging - `/grafana`,`/adminer`,`/argocd`; prod - Grafana + Argo CD абсолютной ссылкой. Пусто → блок скрыт. |
 
 ### Per-service блоки (stateless)
 

@@ -72,6 +72,10 @@ Refresh дополнительно кладётся в httpOnly+SameSite cookie 
 `AuthService.login_oidc(provider, subject, claims)` находит/создаёт пользователя через identities
 и выдаёт access+refresh. Новые провайдеры добавляются конфигом, без правок кода.
 
+Провайдеры подписывают `id_token` асимметрично (Google - RS256), поэтому `verify_id_token` требует
+`cryptography`: backend ставится с экстрой `pyjwt[crypto]` (`pyproject.toml`). Без неё PyJWT умеет
+только HS*, и верификация падает с `RS256 requires 'cryptography' to be installed`.
+
 **Google** доведён до рабочего входа. Streamlit рендерит компоненты в sandboxed iframe без
 `allow-top-navigation`, поэтому GIS-виджет верхнее окно увести не может - используется обычная
 ссылка верхнего уровня на OAuth-эндпоинт (`response_type=id_token`, `response_mode=form_post`):

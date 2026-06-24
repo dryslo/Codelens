@@ -74,6 +74,14 @@ auth:
   rate_limit_attempts: ${AUTH_RL_ATTEMPTS:-10}    # попыток login/register на IP за окно (0 - выкл)
   rate_limit_window: ${AUTH_RL_WINDOW:-60}        # окно ограничителя частоты, сек
 
+# UI: ссылки на дашборды в Админке (видны admin'у, гейт - forward-auth). Пустой URL -> ссылка скрыта.
+# В large-деплое значения задаёт Helm per-overlay; для compose-профиля panels - через PANEL_*_URL.
+ui:
+  panels:
+    Grafana: ${PANEL_GRAFANA_URL:-}
+    Adminer: ${PANEL_ADMINER_URL:-}
+    Qdrant: ${PANEL_QDRANT_URL:-}
+
 # Ingest кодовой базы (ZIP/GitHub из админки).
 ingest:
   max_upload_mb: ${MAX_UPLOAD_MB:-100}            # лимит размера ZIP-загрузки на уровне FastAPI

@@ -24,6 +24,11 @@ config:
   oidc:
     google:
       clientId: "657334521650-f06agmbiql4mj5adn1u5ffr3lolvk1pq.apps.googleusercontent.com"
+  # Дашборды в Админке. Grafana - subpath prod-хоста; Adminer в prod не разворачивается; Argo CD -
+  # один на кластер (ingress на staging-хосте), поэтому абсолютная ссылка.
+  panels:
+    Grafana: /grafana
+    Argo CD: https://staging.codelens.fun/argocd
 
 # Prod-секреты в git не хранятся. Чарт Secret не создаёт (create: false); вместо него в namespace
 # codelens-prod лежит Secret с именем codelens-secrets, созданный через sealed-secrets /

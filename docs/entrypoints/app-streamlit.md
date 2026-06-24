@@ -378,7 +378,29 @@ def _matrix_eval(ctx: Ctx) -> None:
 
 ## Вкладка «Админка» (`frontend/tabs/admin.py`)
 
-Раздел доступен только роли `admin`. Управление индексом и фоновый ingest.
+Раздел доступен только роли `admin`. Дашборды, управление индексом и фоновый ingest.
+
+### Дашборды (`_panels`)
+
+Вверху раздела - блок ссылок на внешние панели (Grafana, Adminer, Argo CD). Источник URL -
+`cfg.ui.panels` (`{Подпись: URL}`); пустой адрес ссылку пропускает, пустой блок не рисуется.
+
+```python
+def _panels(ctx: Ctx) -> None:
+    panels = (ctx.cfg.get("ui") or {}).get("panels") or {}
+    links = [(name, url) for name, url in panels.items() if url]
+    if not links:
+        return
+    st.subheader("📊 Дашборды")
+    for col, (name, url) in zip(st.columns(len(links)), links):
+        col.link_button(name, url, use_container_width=True)
+```
+
+- Значения задаёт деплой: Helm рендерит `config.panels` per-overlay (staging - `/grafana`,
+  `/adminer`, `/argocd`; prod - без Adminer, Argo CD абсолютной ссылкой на staging-хост),
+  compose-профиль `panels` - через `PANEL_*_URL`. Сами панели за тем же forward-auth, что и `/auth/forward-auth`,
+  поэтому ссылки осмысленны только под admin-сессией (разбор - [nginx](../deploy/nginx.md)).
+- Кнопки - subpath того же хоста, отдельного origin не требуют (кроме дашборда Qdrant на `:8081`).
 
 ```python
 def render(ctx: Ctx) -> None:

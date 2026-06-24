@@ -22,6 +22,12 @@ services:
     environment:
       ROLE: frontend
       BACKEND_URL: http://backend:8080
+      # Ссылки на дашборды в Админке. Пусто по умолчанию (в `make up` панелей нет); для профиля panels
+      # резолвятся через nginx. Включить: PANEL_GRAFANA_URL=/grafana PANEL_ADMINER_URL=/adminer \
+      # PANEL_QDRANT_URL=http://localhost:8081/dashboard docker compose --profile panels up.
+      PANEL_GRAFANA_URL: ${PANEL_GRAFANA_URL:-}
+      PANEL_ADMINER_URL: ${PANEL_ADMINER_URL:-}
+      PANEL_QDRANT_URL: ${PANEL_QDRANT_URL:-}
     depends_on: [backend]
   backend:
     build: { context: .., dockerfile: deploy/Dockerfile.backend }

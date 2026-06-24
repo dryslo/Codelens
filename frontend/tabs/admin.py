@@ -11,6 +11,22 @@ if TYPE_CHECKING:
 _ACTIVE = ("queued", "running")
 
 
+def _panels(ctx: Ctx) -> None:
+    """Ссылки на дашборды (Grafana/Adminer/Argo CD) - из cfg.ui.panels, пустые URL пропускаются.
+
+    Панели гейтятся forward-auth по той же admin-сессии, что и Админка, поэтому ссылки видны
+    только администратору. Источник URL - конфиг (Helm рендерит per-overlay, compose - env PANEL_*).
+    """
+    panels = (ctx.cfg.get("ui") or {}).get("panels") or {}
+    links = [(name, url) for name, url in panels.items() if url]
+    if not links:
+        return
+    st.subheader("📊 Дашборды")
+    for col, (name, url) in zip(st.columns(len(links)), links):
+        col.link_button(name, url, use_container_width=True)
+    st.divider()
+
+
 def _draw_jobs(ctx: Ctx) -> None:
     """Отрисовать прогресс-бары фоновых ingest-задач (снимок на текущий момент)."""
     jobs = ctx.backend.ingest_jobs()
@@ -44,7 +60,8 @@ def _ingest_jobs(ctx: Ctx) -> None:
 
 
 def render(ctx: Ctx) -> None:
-    """Рисует вкладку администрирования: управление индексом и фоновый ingest."""
+    """Рисует вкладку администрирования: дашборды, управление индексом и фоновый ingest."""
+    _panels(ctx)
     backend = ctx.backend
     s = backend.stats()
     st.metric("Чанков в индексе", s["chunks"])

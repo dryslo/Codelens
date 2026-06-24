@@ -59,6 +59,10 @@ data:
           issuer: https://accounts.google.com
           login_uri: {{ printf "https://%s/auth/oidc/google/callback" .Values.ingress.host | quote }}
         {{- end }}
+    ui:
+      # Ссылки на дашборды в Админке (subpath того же хоста за forward-auth). Пусто -> блок скрыт.
+      panels:
+        {{- toYaml .Values.config.panels | nindent 8 }}
     llm:
       kind: {{ .Values.config.llm.kind }}
       llm_url: http://{{ $full }}-llm:{{ .Values.llm.port }}

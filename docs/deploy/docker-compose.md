@@ -69,11 +69,17 @@ frontend:
   environment:
     ROLE: frontend
     BACKEND_URL: http://backend:8080
+    PANEL_GRAFANA_URL: ${PANEL_GRAFANA_URL:-}   # ссылки на дашборды в Админке (пусто -> скрыты)
+    PANEL_ADMINER_URL: ${PANEL_ADMINER_URL:-}
+    PANEL_QDRANT_URL: ${PANEL_QDRANT_URL:-}
   depends_on: [backend]
 ```
 
 - Тонкий Streamlit-клиент. Своего ML/БД не держит, ходит в backend по `BACKEND_URL`. Единственная
   точка входа для пользователя на `:8501` (или `http://localhost` через nginx в профиле `panels`).
+- `PANEL_*_URL` наполняют блок «Дашборды» в Админке (`cfg.ui.panels`). По умолчанию пусты - в `make up`
+  панелей нет. Для профиля `panels`: `PANEL_GRAFANA_URL=/grafana PANEL_ADMINER_URL=/adminer
+  PANEL_QDRANT_URL=http://localhost:8081/dashboard docker compose --profile panels up`.
 - `depends_on: [backend]` - условие по умолчанию `service_started` (контейнер запущен, без проверки
   готовности).
 

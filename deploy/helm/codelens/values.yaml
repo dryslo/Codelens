@@ -53,6 +53,9 @@ config:
     google:
       clientId: ""        # Google OAuth Web client_id. Пусто -> кнопка Google-входа скрыта.
 
+  # Ссылки на дашборды в Админке: {Подпись: URL}. Пусто -> блок не рисуется. Задаётся per-overlay.
+  panels: {}
+
 # --- Секреты (Secret в кластере). В prod заменить на SOPS/sealed-secrets/external-secrets. ---
 secrets:
   create: true
